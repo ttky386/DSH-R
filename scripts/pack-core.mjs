@@ -73,17 +73,30 @@ export async function buildCorePackage({ appDir = DEFAULT_APP, version, outDir =
     dshX: { electron },
   }, null, 2)}\n`)
   await mkdir(outDir, { recursive: true })
+  let result
   try {
     if (process.platform === 'win32') {
       const npm = npmInvocation()
-      const windir = process.env.windir || 'C:\\Windows'
-      // npm 内部仍会落回 cmd；UNC cwd 会被 cmd 改成 C:\Windows。先 pushd 成临时盘符。
-      const command = `pushd "${staging}" && "${npm.command}" ${npm.args.join(' ')} pack --pack-destination "${outDir}" & popd`
-      const result = spawnSync(join(windir, 'System32', 'cmd.exe'), ['/d', '/s', '/c', command], { cwd: windir, stdio: 'inherit', windowsHide: false })
-      if (result.status !== 0) throw new Error(`npm pack failed in ${staging}`)
+      // GitHub Actions / 本地 Windows 都在普通盘符路径下，直调 npm-cli.js 即可。
+      // cmd 的 /s 引号归一化在 runner 上会把一条合法路径命令变成
+      // “filename, directory name, or volume label syntax is incorrect”。
+      if (!staging.startsWith('\\\\')) {
+        result = spawnSync(npm.command, [...npm.args, 'pack', '--pack-destination', outDir], {
+          cwd: staging,
+          stdio: 'inherit',
+          windowsHide: false,
+          shell: false,
+        })
+      } else {
+        const windir = process.env.windir || 'C:\\Windows'
+        // npm 内部仍会落回 cmd；UNC cwd 会被 cmd 改成 C:\Windows。先 pushd 成临时盘符。
+        const command = `pushd "${staging}" && "${npm.command}" ${npm.args.join(' ')} pack --pack-destination "${outDir}" & popd`
+        result = spawnSync(join(windir, 'System32', 'cmd.exe'), ['/d', '/s', '/c', command], { cwd: windir, stdio: 'inherit', windowsHide: false })
+      }
     } else {
-      run(npmCommand(), ['pack', '--pack-destination', outDir], staging, false)
+      result = spawnSync(npmCommand(), ['pack', '--pack-destination', outDir], { cwd: staging, stdio: 'inherit', windowsHide: false })
     }
+    if (result.status !== 0) throw new Error(`npm pack failed in ${staging}`)
   } finally {
     await rm(staging, { recursive: true, force: true })
   }
