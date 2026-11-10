@@ -1,0 +1,5 @@
+# DSH-X 首方插件：给官方右侧栏 Browser tab 接上 agent 工具。
+# 只插入一行 Host 插件；Client 半边由 package.json 的 dsh.client 声明加载。
+- insert:
+    - id: dsh-x-sidebar-browser
+      name: 'dsh-x-sidebar-browser'

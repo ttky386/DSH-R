@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254">
+  <defs><linearGradient id="ribbon" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#f2f2f3"/><stop offset="1" stop-color="#bfc0c4"/></linearGradient></defs>
+  <g stroke="#8d8e94" stroke-width="3" stroke-linejoin="round">
+    <path d="M1024 805C1009 776 989 713 967 721C934 730 950 798 960 844C967 880 1003 856 1026 833Z" fill="url(#ribbon)"/>
+    <path d="M1029 805C1053 783 1091 756 1110 775C1134 798 1106 891 1090 900C1066 914 1043 859 1027 834Z" fill="url(#ribbon)"/>
+    <path d="M1019 800Q1030 794 1038 811L1034 833Q1026 846 1018 832Z" fill="#d1d2d5"/>
+  </g>
+  <path d="M1015 813Q985 786 1005 806L1018 824M1038 817Q1073 800 1041 830" fill="none" stroke="#9c9da2" stroke-width="10" stroke-linecap="round" opacity=".65"/>
+</svg>

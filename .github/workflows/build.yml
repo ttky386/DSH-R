@@ -1,0 +1,445 @@
+# 打包：推 tag（或手动触发）时在 GitHub 的机器上出安装包。
+#
+# 为什么要有这个：mac 的包在 Windows 上打不出来（codesign / hdiutil 都是 macOS 独有），
+# 所以 Windows 和 macOS 各自跑在自己的 runner 上；另外这也是「不怕本机环境差异」的一条路。
+#
+# 只上传资产、不创建 Release：Release 连同中文发行说明仍按原来的流程在本地建，
+# 建完这个 workflow 会把产物补上去（Windows 的 exe + SBOM + 清单 + 签名，mac 的 dmg）。
+#
+# 签名是可选的：仓库里配了 DSH_RELEASE_KEY（私钥文件内容）才会签，没配就只出清单。
+#
+# 两条通道各发各的：
+# - 外壳/Electron：三个平台的安装包（electron-updater 用 latest*.yml）
+# - 核心：npm 上的 dsh-x-core，由独立的 core-package job 打包发布，和安装包无关
+# 只有「外壳层」变了才出安装包（shell/、外壳/安装包图标、Electron 版本、electron-builder 配置、
+# 打包脚本）。纯核心发版跳过三个平台的 dist job（测试照跑），Release 标 --latest=false、
+# 安装包资产沿用上一次；预发布通道会在新 release 里放一份上次的 latest.yml，否则
+# electron-updater 在最新 tag 上找不到清单会直接报错。
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # 往 Release 上传资产要这个
+
+jobs:
+  # 发版前先把 Release 建好：后面三个构建 job 的「挂到同 tag 的 Release」才有地方上传。
+  # 正文取 docs/releases/<tag>.md——发版说明是手写审过的，不用 gh 的 --generate-notes。
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shell_changed: ${{ steps.installers.outputs.shell_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 要和上一个 tag 比对，浅克隆拿不到
+
+      # 外壳层 = 装进 resources/app 和 Electron 相关的一切。改了它就必须出新安装包；
+      # 只改核心（src/、public/、插件……）时三个平台的 dist job 整体跳过，核心照发 npm。
+      - name: 判断外壳层有没有变（决定要不要出安装包）
+        id: installers
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "shell_changed=1" >> "$GITHUB_OUTPUT"
+            echo "手动触发：按完整流程出安装包"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME}"
+          prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            echo "shell_changed=1" >> "$GITHUB_OUTPUT"
+            echo "没有上一个 tag：第一版，出安装包"
+            exit 0
+          fi
+          changed=0
+          # 外壳自己的文件 + 只有外壳/安装包用的图标 + 打包配置和打包脚本
+          if ! git diff --quiet "$prev" "$tag" -- shell/ src/assets/icon.png src/assets/tray.ico src/assets/tray.png src/assets/dsh.ico electron-builder.config.mjs scripts/pack.mjs scripts/pack-common.mjs scripts/electron-prune.mjs; then
+            changed=1
+            echo "外壳层文件有改动："
+            git diff --stat "$prev" "$tag" -- shell/ src/assets/icon.png src/assets/tray.ico src/assets/tray.png src/assets/dsh.ico electron-builder.config.mjs scripts/pack.mjs scripts/pack-common.mjs scripts/electron-prune.mjs | tail -1
+          fi
+          # Electron 版本在根 package.json 的 devDependencies：换了运行时就必须重建安装包
+          prev_electron="$(git show "$prev:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).devDependencies?.electron || ''" 2>/dev/null || true)"
+          cur_electron="$(node -p "require('./package.json').devDependencies?.electron || ''")"
+          if [ "$prev_electron" != "$cur_electron" ]; then
+            changed=1
+            echo "Electron $prev_electron → $cur_electron：需要新安装包"
+          fi
+          echo "shell_changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = 0 ]; then
+            echo "只改了核心：跳过安装包构建，核心包单独发 npm"
+          else
+            echo "外壳层有变化：正常出安装包"
+          fi
+
+      # 两个坑都会让用户收不到外壳更新：① 外壳层改了却没升外壳版本；② 正式版 tag 里塞了个预发布外壳版本。
+      - name: 外壳版本检查
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="$(node -p "require('./shell/package.json').version")"
+          case "$tag" in *-*) tag_pre=1;; *) tag_pre=0;; esac
+          case "$version" in *-*) shell_pre=1;; *) shell_pre=0;; esac
+          if [ "$tag_pre" = 0 ] && [ "$shell_pre" = 1 ]; then
+            echo "::error::$tag 是正式版，但外壳版本还是预发布（$version）。electron-updater 不会把预发布推给正式版用户，这个包等于发不出去。"
+            exit 1
+          fi
+          prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+          if [ -z "$prev" ]; then echo "没有上一个 tag，跳过改动检查"; exit 0; fi
+          if [ "${{ steps.installers.outputs.shell_changed }}" = "0" ]; then
+            echo "外壳层没变，外壳版本保持 $version（bump 了也没人会收到这个安装包）"
+            exit 0
+          fi
+          if git diff --quiet "$prev" "$tag" -- shell/ src/assets/icon.png src/assets/tray.ico src/assets/tray.png src/assets/dsh.ico electron-builder.config.mjs; then
+            # 只有打包脚本/工具链变了：不影响用户手上的外壳，不强制 bump
+            echo "只有打包脚本/工具链变化，外壳版本可以保持 $version"
+            exit 0
+          fi
+          if git diff --quiet "$prev" "$tag" -- shell/package.json; then
+            echo "::error::外壳层有改动，但 shell/package.json 的版本没变（还是 $version）。请 bump 后重打 tag。"
+            exit 1
+          fi
+          echo "外壳层有改动，版本已升到 $version"
+
+      - name: 建 Release（正文取 docs/releases/<tag>.md）
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag 的 Release 已存在，跳过"; exit 0; fi
+          notes="docs/releases/$tag.md"
+          if [ ! -f "$notes" ]; then echo "::error::缺少 $notes，先把发版说明写进仓库再打 tag"; exit 1; fi
+          args=(--title "DSH-X $tag" --notes-file "$notes" --verify-tag)
+          case "$tag" in
+            *-*) args+=(--prerelease) ;;
+            *)
+              # 纯核心的正式版没有安装包：别抢「Latest」，否则发布页的下载链接和
+              # electron-updater 的 /releases/latest 都会指到一个没有 exe/latest.yml 的 tag
+              if [ "${{ steps.installers.outputs.shell_changed }}" = "0" ]; then args+=(--latest=false); fi
+              ;;
+          esac
+          gh release create "$tag" "${args[@]}"
+          # 预发布通道不看 /releases/latest，而是按通道在 release 列表里挑最新的 rc/alpha tag。
+          # 纯核心的预发布 tag 上没有安装包，把上一次外壳发版的 latest.yml 原样放一份，
+          # electron-updater 读到的是旧版本号 → 正常判「已是最新」，不会报「找不到 latest.yml」。
+          if [[ "$tag" == *-* ]] && [ "${{ steps.installers.outputs.shell_changed }}" = "0" ]; then
+            mkdir -p "$RUNNER_TEMP/shell-yml"
+            for t in $(git tag --sort=-v:refname | head -20); do
+              [ "$t" = "$tag" ] && continue
+              if gh release view "$t" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx latest.yml; then
+                gh release download "$t" --pattern latest.yml --dir "$RUNNER_TEMP/shell-yml" --clobber
+                gh release upload "$tag" "$RUNNER_TEMP/shell-yml/latest.yml" --clobber
+                echo "已把 $t 的 latest.yml 复制到 $tag（外壳版本没变，预发布通道照旧）"
+                break
+              fi
+            done
+          fi
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # 外壳换成 Electron 后打包要 devDependencies（@electron/packager + electron）
+      - name: 安装打包依赖
+        run: npm ci
+
+      - name: 跑测试
+        shell: pwsh
+        run: |
+          # CI runner 上假 dsh 的启动偶发超时，每次挂的用例不同；整套最多重试 3 次。
+          # 确定性失败会连挂 3 次，不会被这里放过。
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npm test
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($attempt -eq 3) { exit $LASTEXITCODE }
+            Write-Host "第 $attempt 次测试失败，5 秒后重试整套"
+            Start-Sleep -Seconds 5
+          }
+
+      - name: 打包（electron-builder：NSIS + latest.yml/blockmap）
+        if: needs.prepare.outputs.shell_changed == '1'
+        run: npm run dist
+
+      # 0.1.18 及更早的 Inno 安装版找 releases/latest/download/DSH-Setup.exe，
+      # 并用 /silent /log=... 交接；这里做一个兼容桥，先写日志再静默跑新 NSIS 包。
+      - name: 构建旧版兼容安装包（DSH-Setup.exe）
+        if: needs.prepare.outputs.shell_changed == '1'
+        shell: pwsh
+        run: |
+          # 安装包名跟外壳版本（shell/package.json）；根 package.json 是核心版本，两者可能不同。
+          $version = (Get-Content shell/package.json | ConvertFrom-Json).version
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          $source = Join-Path $PWD "scripts\legacy-updater-bridge.cs"
+          $installer = Join-Path $PWD "release\eb\DSH-Setup-$version.exe"
+          $out = Join-Path $PWD "release\eb\DSH-Setup.exe"
+          & $csc /nologo /target:winexe "/out:$out" "/resource:$installer,DSH-Setup-payload.exe" $source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.shell_changed == '1'
+        with:
+          name: DSH-Setup-windows
+          path: |
+            release/eb/DSH-Setup-*.exe
+            release/eb/DSH-Setup-*.exe.blockmap
+            release/eb/DSH-Setup.exe
+            release/eb/latest.yml
+          if-no-files-found: error
+
+      - name: 挂到同 tag 的 Release 上
+        if: needs.prepare.outputs.shell_changed == '1' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "还没有 $tag 的 Release，资产先留在 workflow artifacts 里；建好 Release 后再跑一次即可"
+            exit 0
+          fi
+          # 安装包放发布页；核心包在 npm 上，SBOM/发布清单留在本机自查
+          # electron-updater 要 latest.yml + 安装包 + blockmap；核心包在 npm 上
+          # DSH-Setup.exe 是给 0.1.18 旧更新器的兼容桥
+          gh release upload "$tag" release/eb/DSH-Setup-*.exe release/eb/DSH-Setup-*.exe.blockmap release/eb/DSH-Setup.exe release/eb/latest.yml --clobber
+
+  # mac 的打包能力在 PR #25（scripts/pack-mac.mjs）里，合并之后这里才真的会出包；
+  # 没合并时这一步只打个招呼就过，不至于把整个 workflow 挂红。
+  macos:
+    needs: prepare
+    # 纯核心发版没有 mac 安装包可出；mac 的测试由 Windows / Linux job 覆盖同一份 JS
+    if: needs.prepare.outputs.shell_changed == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15 # Apple Silicon（macos-14 的 arm64 镜像 GitHub 已退役，用了会直接报 unsupported）
+            arch: arm64
+          - runner: macos-15-intel # Intel（macos-13 这个标签 GitHub 已经退役，用了会一直排队）
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      DSH_MAC_ARCH: ${{ matrix.arch }}
+      # tag 构建只有在配置了固定证书时才强制签名；没配就退回 ad-hoc，
+      # 否则没有证书的仓库打 tag 时 mac 两个 job 必红、dmg 出不来。
+      DSH_MAC_REQUIRE_SIGNED: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.DSH_MAC_CERT_P12_BASE64 != '' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 还没有 mac 打包支持就跳过
+        id: probe
+        run: |
+          if [ -f scripts/pack-mac.mjs ]; then echo "ready=yes" >> "$GITHUB_OUTPUT"; else echo "ready=no" >> "$GITHUB_OUTPUT"; echo "scripts/pack-mac.mjs 还不存在（PR #25 未合并），跳过 mac 打包"; fi
+
+      # mac 外壳是 Electron（shell/）：打包要 devDependencies 里的 electron 与 @electron/packager
+      - name: 安装打包依赖
+        if: steps.probe.outputs.ready == 'yes'
+        run: npm ci
+
+      - name: 跑测试
+        # x64 的 Intel runner 上假 dsh 启动持续超时（每次挂的用例都不同，整套重试 3 次也过不去）；
+        # x64 与 arm64 跑同一份 JS，测试交给 arm64 + Windows + Linux，这台只负责出 dmg。
+        if: steps.probe.outputs.ready == 'yes' && matrix.arch == 'arm64'
+        # arm64 runner 只有 3 核：并发 1 仍会偶发假 dsh 启动超时；整套最多重试 3 次，
+        # 确定性失败会连挂 3 次。
+        run: |
+          for attempt in 1 2 3; do
+            npm test -- --test-concurrency=1 && exit 0
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "第 $attempt 次测试失败，5 秒后重试整套"
+            sleep 5
+          done
+
+      - name: 导入固定 macOS 签名证书
+        if: steps.probe.outputs.ready == 'yes'
+        shell: bash
+        env:
+          DSH_MAC_CERT_P12_BASE64: ${{ secrets.DSH_MAC_CERT_P12_BASE64 }}
+          DSH_MAC_CERT_PASSWORD: ${{ secrets.DSH_MAC_CERT_PASSWORD }}
+          DSH_MAC_EXPECTED_SHA1: ${{ vars.DSH_MAC_SIGNING_SHA1 }}
+        run: bash scripts/setup-mac-signing.sh
+
+      - name: 打包（electron-builder：dmg）
+        if: steps.probe.outputs.ready == 'yes'
+        run: npm run dist
+
+      - uses: actions/upload-artifact@v4
+        if: steps.probe.outputs.ready == 'yes'
+        with:
+          name: DSH-X-mac-${{ matrix.arch }}
+          path: release/eb/DSH-X-*.dmg
+          if-no-files-found: error
+
+      # electron-builder 的 mac target 会同时打 arm64/x64 两份 dmg，两个 job 的 release/eb 里都有；
+      # 只让 arm64 job 上传，避免两个 job 并发 clobber 同一个 asset（x64 曾因此 404）。
+      - name: 挂到同 tag 的 Release 上
+        if: steps.probe.outputs.ready == 'yes' && matrix.arch == 'arm64' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # mac 没有签名，外壳自更新装不上，只发 dmg 给人手动安装
+            gh release upload "$tag" release/eb/DSH-X-*.dmg --clobber
+          else
+            echo "还没有 $tag 的 Release，dmg 先留在 workflow artifacts 里"
+          fi
+
+      - name: 清理临时签名钥匙串
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/dsh-mac-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/dsh-mac-signing.keychain-db"
+          fi
+
+  # Linux：AppImage（外壳自更新走 electron-updater 的 AppImage 通道）+ deb（装进系统菜单、
+  # 能被 apt 卸干净，但没有外壳自更新——updater.mjs 拿不到 APPIMAGE 变量时会当不支持）
+  linux:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装打包依赖
+        run: npm ci
+
+      - name: 跑测试
+        run: |
+          for attempt in 1 2 3; do
+            npm test -- --test-timeout=120000 && exit 0
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "第 $attempt 次测试失败，5 秒后重试整套"
+            sleep 5
+          done
+
+      - name: 打包（electron-builder：AppImage + deb + latest-linux.yml）
+        if: needs.prepare.outputs.shell_changed == '1'
+        run: npm run dist
+
+      - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.shell_changed == '1'
+        with:
+          name: DSH-X-linux
+          path: |
+            release/eb/DSH-X-*.AppImage
+            release/eb/DSH-X-*.deb
+            release/eb/latest-linux.yml
+          if-no-files-found: error
+
+      - name: 挂到同 tag 的 Release 上
+        if: needs.prepare.outputs.shell_changed == '1' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # latest-linux.yml 只描述 AppImage（electron-updater 的 Linux 通道），deb 不进它
+            gh release upload "$tag" release/eb/DSH-X-*.AppImage release/eb/DSH-X-*.deb release/eb/latest-linux.yml --clobber
+          else
+            echo "还没有 $tag 的 Release，AppImage 和 deb 先留在 workflow artifacts 里"
+          fi
+
+  # 核心 npm 包：和安装包完全独立。纯核心发版时三个平台的 dist job 全跳过，这里照发 dsh-x-core；
+  # 以前这一步挂在 mac arm64 job 里，跳过 mac 就等于核心发不出去。
+  core-package:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # 只要 node_modules/electron/package.json 里的版本号（写进核心包的 dshX.electron），
+      # 不需要 Electron 本体，跳过它的下载脚本
+      - name: 安装打包依赖（跳过 Electron 下载）
+        run: npm ci --ignore-scripts
+
+      # 核心层：APP_FILES + public/compat/perf/packs + node 包装（npm/pnpm 的 JS）。
+      # --stage-only 只组装这一层，不碰外壳、不跑 electron-builder。
+      - name: 组装核心层
+        run: node scripts/pack.mjs --stage-only
+
+      - name: 打包核心 npm 包
+        run: node scripts/pack-core.mjs
+
+      - name: 发布核心到 npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "没有 NPM_TOKEN，跳过 npm 发布"; exit 0; fi
+          VERSION="$(node -p "require('./package.json').version")"
+          # version.js 已随运行时源码收进 src/，别再 import 根目录。
+          TAG="$(node --input-type=module -e "import { versionChannel } from './src/version.js'; import { readFileSync } from 'node:fs'; const v=JSON.parse(readFileSync('package.json','utf8')).version; console.log({official:'latest',rc:'rc',alpha:'alpha'}[versionChannel(v)] || 'latest')")"
+          if npm view "dsh-x-core@$VERSION" version >/dev/null 2>&1; then echo "dsh-x-core@$VERSION 已发布，跳过"; exit 0; fi
+          # 必须带 ./：npm 会把 `release/xxx.tgz` 当成 GitHub 的 owner/repo 简写去 ls-remote。
+          npm publish "./release/dsh-x-core-$VERSION.tgz" --tag "$TAG" --access public
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-x-core-npm
+          path: release/dsh-x-core-*.tgz
+          if-no-files-found: error
+
+  # npm 版：CLI 包 + 从 npm 拉跨平台核心。等核心包先到 registry、三个平台的测试都过再发
+  # （纯核心发版时三个平台 job 只跑测试不打包，CLI 版本没变，这个 job 照常是空转/跳过）。
+  npm-package:
+    needs: [windows, macos, linux, core-package]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 打包并发布 dsh-x npm 包
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ] || ! [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            node scripts/pack-npm.mjs
+            echo "没有 NPM_TOKEN 或不是 tag，只打包不发布"
+            exit 0
+          fi
+          node scripts/pack-npm.mjs --publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-x-npm
+          path: release/yyh001-dsh-x-*.tgz
+          if-no-files-found: error

@@ -1,0 +1,501 @@
+/**
+ * Profile 插件开关：读写 dsh 用户补丁层 cordis.patch.yml。
+ *
+ * 机制与 dshmarket 的 lib/patch.js 相同——`- id: <行> / disabled: true` 停掉一条
+ * loader 行，删掉该块即恢复；dsh 每次启动都会应用这层补丁，运行中还会热加载。
+ * 因为只动文件、不需要 dsh 在跑，dsh 起不来时这里才是唯一能用的开关。
+ *
+ * 安全线（对齐市场实现，别把坏状态写得更坏）：
+ * - 行 id 只允许 [A-Za-z0-9_.-]；补丁文件不是合法条目数组时拒绝追加；
+ * - 删掉最后一行后恢复模板的 `[]` 占位，否则整个 profile 起不来；
+ * - 官方包（@deepseek-ai/*）与市场自管行（mkt-/client-）不提供开关。
+ */
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const ROW_ID_RE = /^[A-Za-z0-9_.-]+$/
+/** 官方组件：关掉任何一条都可能让 dsh 起不来。 */
+const PROTECTED_PACKAGE_RE = /^@deepseek-ai\//
+/** 市场自己的运行时命名空间，永久补丁行会变成孤儿。 */
+const MARKET_ROW_RE = /^(?:mkt-|client-|include:)/
+
+/** 启动失败输出里点名的失败插件行：failed to import/apply loader entry <行> (<包>)。 */
+const FAILED_ROW_RE = /failed to (?:import|apply) loader entry\s+(\S+)\s+\(([^)\s]+)\)/g
+
+/** 启动失败输出里解析不到的 profile bundle（依赖缺失或断链，可重建修复）。 */
+const UNRESOLVED_BUNDLE_RE = /cannot resolve profile bundle\s+"([^"]+)"/g
+
+/**
+ * 从启动失败输出里认出被点名的已装插件。
+ *
+ * 报错形状一直在变，按形状解析必然漏：老的是 `failed to import loader entry X (pkg)`，
+ * 新版会变成 `failed to apply loader entry <核心 loader>`，而真正出问题的插件藏在 cause
+ * 里（`typert-loader: dsh-cost-meter invocation "..." result codec has no create()`）。
+ * 所以反过来做——拿已装插件的名字去文本里找，谁被点名就是谁；越靠前出现的越可能是根因，
+ * 因为 cause 的开头就是第一个失败项。
+ */
+export function pluginsNamedInFailure(profileDir, text) {
+  const haystack = String(text ?? '')
+  const found = []
+  for (const plugin of listPlugins(profileDir).plugins) {
+    if (!plugin.enabled || !plugin.toggleable || plugin.official || !plugin.ids.length) continue
+    // 包名整词匹配，别让 dsh-cost 命中 dsh-cost-meter
+    const pattern = new RegExp(`(^|[^\\w@/.-])${escapeRegExp(plugin.name)}(?![\\w-])`)
+    const at = haystack.search(pattern)
+    if (at < 0) continue
+    found.push({ name: plugin.name, ids: plugin.ids, at })
+  }
+  found.sort((a, b) => a.at - b.at)
+  return found
+}
+
+export function profileDirOf(dshHome, profile = 'web') {
+  return join(dshHome, 'profiles', profile)
+}
+
+export function patchPathOf(profileDir) {
+  return join(profileDir, 'cordis.patch.yml')
+}
+
+/** 读用户补丁层里已有的禁用/强制启用行（行扫描，不解析 YAML）。 */
+export function readPatchState(patchPath) {
+  let text = ''
+  try {
+    text = readFileSync(patchPath, 'utf8')
+  } catch {
+    // 没有补丁文件 = 空状态
+  }
+  const disables = []
+  const forced = []
+  const lines = text.split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^- id:\s*['"]?([A-Za-z0-9_.-]+)['"]?\s*$/.exec(lines[index] ?? '')
+    if (!match) continue
+    // 一条 patch 行是 YAML 映射，键顺序不固定：dsh 自己就会把 disabled 加到已有行
+    // 的其它键后面（dsh-plugin-manager 用 setIn 写在原行上），所以整行扫。
+    // 只认正好两个缩进的键——再深一级是 config 里的同名字段，不是这一行的开关。
+    for (let cursor = index + 1; cursor < lines.length && !/^- /.test(lines[cursor]); cursor += 1) {
+      const flag = /^ {2}disabled:\s*(true|false)\s*$/.exec(lines[cursor])
+      if (!flag) continue
+      if (flag[1] === 'true') disables.push(match[1])
+      else forced.push(match[1])
+      break
+    }
+  }
+  return { disables, forced, text }
+}
+
+/** 插件补丁 `- insert:` 块里插入的 loader 行 id（4 空格缩进，避免误吞 config 里的 id）。 */
+export function insertedIds(text) {
+  const ids = []
+  let inInsert = false
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (/^- /.test(line)) inInsert = /^- insert:\s*$/.test(line)
+    if (!inInsert) continue
+    const match = /^ {4}- id:\s*['"]?([A-Za-z0-9_.-]+)['"]?\s*$/.exec(line)
+    if (match) ids.push(match[1])
+  }
+  return ids
+}
+
+/**
+ * 已装包是不是一个可挂载进 `dsh.profile.bundles` 的 bundle。
+ *
+ * 只看磁盘上的声明，不为猜包名服务：`dsh` 字段（任何形状）或根目录的
+ * `cordis.patch.yml` 都算 bundle；纯依赖/客户端插件没有这两样，挂进层栈只会让
+ * dsh 启动时解析不到 bundle 而整棵插件树失败。
+ */
+export function packageLooksLikeBundle(profileDir, packageName) {
+  const pkgDir = join(profileDir, 'node_modules', packageName)
+  try {
+    const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
+    if (manifest?.dsh !== undefined) return true
+  } catch {
+    return false
+  }
+  return existsSync(join(pkgDir, 'cordis.patch.yml'))
+}
+
+/** 一个已安装插件包拥有的 loader 行：声明的 dsh.bundle.patch + 根目录 cordis.patch.yml。 */
+export function packageRowIds(profileDir, packageName) {
+  const pkgDir = join(profileDir, 'node_modules', packageName)
+  const ids = new Set()
+  try {
+    const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
+    const declared = manifest?.dsh?.bundle?.patch
+    if (typeof declared === 'string' && declared.trim()) {
+      const file = join(pkgDir, declared)
+      if (existsSync(file)) for (const id of insertedIds(readFileSync(file, 'utf8'))) ids.add(id)
+    }
+  } catch {
+    // 包不在或清单损坏：loader 侧可能还是知道，交给调用方
+  }
+  try {
+    for (const id of insertedIds(readFileSync(join(pkgDir, 'cordis.patch.yml'), 'utf8'))) ids.add(id)
+  } catch {
+    // 没有传统位置的补丁
+  }
+  return [...ids]
+}
+
+function packageVersion(profileDir, name) {
+  const meta = packageMeta(profileDir, name)
+  return meta.version
+}
+
+/** 已装插件自带的版本与一句话自述（读不到就只有版本为空，不影响其余字段）。 */
+function packageMeta(profileDir, name) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8'))
+    const description = typeof manifest.description === 'string' ? manifest.description.trim() : ''
+    return {
+      version: String(manifest.version || ''),
+      // 自述可能很长，列表里只当一行副标题用
+      description: description.length > 140 ? `${description.slice(0, 139)}…` : description,
+    }
+  } catch {
+    return { version: '', description: '' }
+  }
+}
+
+/** 已装插件清单 + 当前开关状态（无需 dsh 在跑）。 */
+export function listPlugins(profileDir) {
+  const patchPath = patchPathOf(profileDir)
+  const state = readPatchState(patchPath)
+  let manifest = {}
+  try {
+    manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
+  } catch {
+    // 空 profile：返回空清单
+  }
+  const deps = Object.keys(manifest?.dependencies ?? {}).sort()
+  // 0.2.x 起层栈只挂载 dsh.profile.bundles 里的包：包还在依赖里、但被「安全启动」
+  // 摘出了清单时，它其实不会被加载，列表里必须显示成关闭（打开开关会重新挂回去，
+  // 见 setPluginEnabled）。客户端插件没有加载行，不参与挂载判断。
+  const bundles = Array.isArray(manifest?.dsh?.profile?.bundles) ? manifest.dsh.profile.bundles : []
+  const plugins = deps.map((name) => {
+    const ids = packageRowIds(profileDir, name)
+    const official = PROTECTED_PACKAGE_RE.test(name)
+    const marketOwned = ids.length > 0 && ids.every((id) => MARKET_ROW_RE.test(id))
+    const disabled = ids.some((id) => state.disables.includes(id))
+    const mounted = !ids.length || bundles.includes(name)
+    let toggleable = true
+    let reason = ''
+    if (!ids.length) {
+      toggleable = false
+      reason = '没有可开关的加载行（客户端插件，由插件市场管理）'
+    } else if (official) {
+      toggleable = false
+      reason = '官方组件，不提供开关'
+    } else if (marketOwned) {
+      toggleable = false
+      reason = '市场自管行，不提供开关'
+    }
+    const meta = packageMeta(profileDir, name)
+    return { name, version: meta.version, description: meta.description, ids, enabled: mounted && !disabled, mounted, toggleable, reason, official }
+  })
+  return { profileDir, patchPath, plugins, disables: state.disables }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function block(rowId, disabled) {
+  return `- id: ${rowId}\n  disabled: ${disabled ? 'true' : 'false'}\n`
+}
+
+/**
+ * 补丁文件是否还是合法的顶层条目数组（行级启发式，宁可拒绝也不写坏）。
+ * mcp.js 写自己的 insert 区块之前也过一遍这个，两边策略必须一致。
+ */
+export function looksLikeEntryList(text) {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '' && !line.trim().startsWith('#'))
+  if (!lines.length) return true
+  if (lines.length === 1 && /^\[\s*\]$/.test(lines[0].trim())) return true
+  if (lines.some((line) => /^\S/.test(line) && !line.startsWith('- '))) return false
+  if (lines.some((line) => /^\[\s*\]$|^\{\s*\}$/.test(line.trim()))) return false
+  return true
+}
+
+/** 追加一行禁用/强制启用（纯文本变换，便于一次写多行）。 */
+export function appendRowBlock(text, rowId, disabled) {
+  const row = block(rowId, disabled)
+  const core = String(text ?? '').trim()
+  if (core === '') return { ok: true, text: row }
+  const withoutComments = core.replace(/^[ \t]*#.*$/gmu, '').trim()
+  if (withoutComments === '') {
+    const head = text.endsWith('\n') ? text : `${text}\n`
+    return { ok: true, text: `${head}${row}` }
+  }
+  if (withoutComments === '[]' || withoutComments === '[ ]') {
+    const commented = text.replace(/^[ \t]*\[[ \t]*\][ \t]*(?:#.*)?(?:\r?\n|$)/mu, '# []\n')
+    const head = commented.endsWith('\n') ? commented : `${commented}\n`
+    return { ok: true, text: `${head}${row}` }
+  }
+  const lastContent = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#')).pop() ?? ''
+  if (/^[[{]/.test(lastContent)) {
+    return { ok: false, reason: '补丁层以顶层流式结构结尾，拒绝自动追加；请先把 cordis.patch.yml 整理成条目列表' }
+  }
+  if (!looksLikeEntryList(text)) {
+    return { ok: false, reason: '补丁层不是合法的条目数组，已拒绝写入以免破坏；请先修正 cordis.patch.yml' }
+  }
+  const head = text.endsWith('\n') ? text : `${text}\n`
+  return { ok: true, text: `${head}${row}` }
+}
+
+/**
+ * 删掉某一行里的 `disabled: <值>`（键在行里的位置不限，别的覆盖键留着；整行只剩它就整行删掉）。
+ * 位置不限这条是必要的：#9 里就有人遇到 `disabled` 不在第二行的补丁行。
+ */
+function removeRowBlock(text, rowId, disabled = true) {
+  const want = disabled ? 'true' : 'false'
+  const idRe = new RegExp(`^- id:\\s*['"]?${escapeRegExp(rowId)}['"]?\\s*$`)
+  const valueRe = new RegExp(`^ {2}disabled:\\s*${want}\\s*$`)
+  const lines = String(text ?? '').split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!idRe.test(lines[index])) continue
+    let rowEnd = index + 1
+    while (rowEnd < lines.length && !/^- /.test(lines[rowEnd])) rowEnd += 1
+    const row = lines.slice(index, rowEnd)
+    const at = row.findIndex((line, pos) => pos > 0 && valueRe.test(line))
+    if (at < 0) return text
+    const kept = row.filter((_, pos) => pos !== at)
+    const stillHasKeys = kept.slice(1).some((line) => line.trim() !== '')
+    lines.splice(index, rowEnd - index, ...(stillHasKeys ? kept : []))
+    return lines.join('\n')
+  }
+  return text
+}
+
+const removeDisableBlock = (text, rowId) => removeRowBlock(text, rowId, true)
+const appendDisableBlock = (text, rowId) => appendRowBlock(text, rowId, true)
+
+/** 补丁层空了就把模板的 `[]` 占位恢复回来（否则 dsh 拒绝启动整个 profile）。 */
+function ensurePlaceholder(text) {
+  if (text.replace(/^[ \t]*#.*$/gmu, '').trim() !== '') return text
+  const revived = text.replace(/^[ \t]*#[ \t]*\[[ \t]*\][ \t]*(?:\r?\n|$)/mu, '[]\n')
+  if (revived !== text) return revived
+  return text === '' || text.endsWith('\n') ? `${text}[]\n` : `${text}\n[]\n`
+}
+
+function backupOnce(patchPath) {
+  try {
+    if (existsSync(patchPath)) copyFileSync(patchPath, `${patchPath}.bak`)
+  } catch {
+    // 备份失败不阻塞开关本身
+  }
+}
+
+/** 禁用一条 loader 行（幂等）。返回是否发生变化。 */
+export function disableRowId(profileDir, rowId) {
+  if (!ROW_ID_RE.test(rowId)) throw new Error(`行 id ${rowId} 含特殊字符，不能写入补丁层`)
+  if (MARKET_ROW_RE.test(rowId)) throw new Error(`行 id ${rowId} 由插件市场自管，不写入补丁层`)
+  const patchPath = patchPathOf(profileDir)
+  const state = readPatchState(patchPath)
+  if (state.disables.includes(rowId)) return { ok: true, changed: false }
+  const result = appendDisableBlock(state.text, rowId)
+  if (!result.ok) throw new Error(result.reason)
+  backupOnce(patchPath)
+  writeFileSync(patchPath, result.text)
+  return { ok: true, changed: true }
+}
+
+/** 重新启用一条 loader 行：删掉禁用块。返回是否发生变化。 */
+export function enableRowId(profileDir, rowId) {
+  if (!ROW_ID_RE.test(rowId)) throw new Error(`行 id ${rowId} 含特殊字符`)
+  const patchPath = patchPathOf(profileDir)
+  const state = readPatchState(patchPath)
+  const next = removeDisableBlock(state.text, rowId)
+  if (next === state.text) return { ok: true, changed: false }
+  backupOnce(patchPath)
+  writeFileSync(patchPath, ensurePlaceholder(next))
+  return { ok: true, changed: true }
+}
+
+/**
+ * 一次性摘掉若干行的禁用块（卸载插件后清掉它留下的开关状态）。
+ *
+ * 不清理的话，补丁层会留下指向已卸载包的 `disabled: true`；这个包以后重装时
+ * 会莫名其妙地处于禁用状态，而用户早已不记得关过它。只删 `disabled: true`，
+ * 行里别的覆盖键留着；整行只剩 id/disabled 时按现有规则整块删掉。
+ */
+export function dropRowDisables(profileDir, rowIds) {
+  const ids = [...new Set(rowIds)].filter((id) => ROW_ID_RE.test(id) && !MARKET_ROW_RE.test(id))
+  if (!ids.length) return { ok: true, changed: false }
+  const patchPath = patchPathOf(profileDir)
+  const state = readPatchState(patchPath)
+  let text = state.text
+  for (const id of ids) text = removeDisableBlock(text, id)
+  if (text === state.text) return { ok: true, changed: false }
+  backupOnce(patchPath)
+  writeFileSync(patchPath, ensurePlaceholder(text))
+  return { ok: true, changed: true }
+}
+
+/**
+ * 强制启用/取消强制启用一条 loader 行（写/删 `disabled: false` 覆盖块）。
+ *
+ * 官方模板会把某些行 patch 成 disabled（如 web 模板默认关掉本地技能加载），
+ * 插件页的开关对官方包不开放，但用户层覆盖是合法的——技能总开关走这里。
+ */
+export function forceRowId(profileDir, rowId, forced) {
+  if (!ROW_ID_RE.test(rowId)) throw new Error(`行 id ${rowId} 含特殊字符`)
+  if (MARKET_ROW_RE.test(rowId)) throw new Error(`行 id ${rowId} 由插件市场自管，不写入补丁层`)
+  const patchPath = patchPathOf(profileDir)
+  const state = readPatchState(patchPath)
+  if (forced) {
+    if (state.forced.includes(rowId)) return { ok: true, changed: false }
+    const result = appendRowBlock(state.text, rowId, false)
+    if (!result.ok) throw new Error(result.reason)
+    backupOnce(patchPath)
+    writeFileSync(patchPath, result.text)
+    return { ok: true, changed: true }
+  }
+  const next = removeRowBlock(state.text, rowId, false)
+  if (next === state.text) return { ok: true, changed: false }
+  backupOnce(patchPath)
+  writeFileSync(patchPath, ensurePlaceholder(next))
+  return { ok: true, changed: true }
+}
+
+/** 按包名整包开关。 */
+export function setPluginEnabled(profileDir, packageName, enabled) {
+  if (PROTECTED_PACKAGE_RE.test(packageName)) throw new Error('官方组件不提供开关')
+  const ids = packageRowIds(profileDir, packageName)
+  if (!ids.length) throw new Error(`${packageName} 没有可开关的加载行`)
+  const targets = ids.filter((id) => !MARKET_ROW_RE.test(id))
+  if (!targets.length) throw new Error(`${packageName} 的加载行由市场自管，不提供开关`)
+  const patchPath = patchPathOf(profileDir)
+  const initial = readPatchState(patchPath)
+  const disabledSet = new Set(initial.disables)
+  let text = initial.text
+  let changed = false
+  for (const id of targets) {
+    if (enabled) {
+      const next = removeDisableBlock(text, id)
+      if (next !== text) {
+        text = next
+        disabledSet.delete(id)
+        changed = true
+      }
+    } else {
+      if (disabledSet.has(id)) continue
+      const result = appendDisableBlock(text, id)
+      if (!result.ok) throw new Error(result.reason)
+      text = result.text
+      disabledSet.add(id)
+      changed = true
+    }
+  }
+  if (changed) {
+    backupOnce(patchPath)
+    writeFileSync(patchPath, ensurePlaceholder(text))
+  }
+  // 「启用」要保证真的挂上：0.2.x 的 dsh 只挂载清单 bundles 里的插件，已挂载时是空操作
+  const mounted = enabled ? ensureBundleMounted(profileDir, packageName).changed : false
+  return { ok: true, changed, ids: targets, mounted }
+}
+
+/** 从安装 spec（`pkg@1.2`、`@scope/pkg@1.2`、file:/git: 源）里取出纯包名；本地/远端源取不出，返回空串。 */
+export function bundleNameOf(spec) {
+  const value = String(spec ?? '')
+  if (/^(?:file:|git\+|github:|https?:)/.test(value)) return ''
+  // 带 scope 的包名里那个 `@` 是名字的一部分（`@scope/pkg`），版本号才是名字之后那个 `@`。
+  // 按 `@` 直接 split 会把 `@scope/pkg@1.2` 切成 `scope/pkg` + `1.2`，拼回来的
+  // `@scope/pkg/1.2` 是个不存在的包名：dsh 解析不到 bundle，插件会一直起不来。
+  const match = /^(@[^/@]+\/[^@/]+|[^@/]+)(?:@[^@]*)?$/.exec(value)
+  return match ? match[1] : ''
+}
+
+/**
+ * 把插件写进 profile 清单的 `dsh.profile.bundles`（0.2.x 起这是唯一挂载依据）。
+ * 0.1.x 的 `dsh plugin add` 会顺手写，0.2.1-alpha.1 起是纯 pnpm 透传不再写——
+ * 不补的话，启动器装完/启用的插件在 dsh 里永远是关闭状态，只能进 dsh 手动开。
+ * bundles 不是数组的老清单不动（语义拿不准的东西别碰）。
+ */
+export function ensureBundleMounted(profileDir, spec) {
+  const packageName = bundleNameOf(spec)
+  if (!packageName) return { ok: false, changed: false, name: '', reason: '本地/远端源取不出包名' }
+  const manifestPath = join(profileDir, 'package.json')
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch {
+    return { ok: false, changed: false, name: packageName, reason: 'profile 清单读不了' }
+  }
+  const bundles = manifest?.dsh?.profile?.bundles
+  if (!Array.isArray(bundles)) return { ok: false, changed: false, name: packageName, reason: '清单里没有 bundles 字段' }
+  if (bundles.includes(packageName)) return { ok: true, changed: false, name: packageName }
+  bundles.push(packageName)
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  return { ok: true, changed: true, name: packageName }
+}
+
+/**
+ * 把指定的包名从 `dsh.profile.bundles` 里摘掉（卸载插件时用；pnpm remove 只改依赖，不改层栈）。
+ *
+ * @param {string} profileDir - profile 目录。
+ * @param {string[]} names - 要摘掉的包名。
+ * @returns {{ ok: boolean, changed: boolean, reason?: string }} 结果。
+ */
+export function removeBundleMounted(profileDir, names) {
+  const manifestPath = join(profileDir, 'package.json')
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch {
+    return { ok: false, changed: false, reason: 'profile 清单读不了' }
+  }
+  const bundles = manifest?.dsh?.profile?.bundles
+  if (!Array.isArray(bundles)) return { ok: false, changed: false, reason: '清单里没有 bundles 字段' }
+  const drop = new Set(names)
+  const next = bundles.filter((name) => !drop.has(name))
+  if (next.length === bundles.length) return { ok: true, changed: false }
+  manifest.dsh.profile.bundles = next
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  return { ok: true, changed: true }
+}
+
+/** 找到某条 loader 行属于哪个已装插件（找不到返回空串，例如传递挂载的行）。 */
+export function ownerOfRow(profileDir, rowId) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
+    for (const name of Object.keys(manifest?.dependencies ?? {})) {
+      if (packageRowIds(profileDir, name).includes(rowId)) return name
+    }
+  } catch {
+    // profile 清单不可读：按未知属主处理
+  }
+  return ''
+}
+
+/** 从启动失败输出里解析被点名的失败插件行（去重）。 */
+export function parseFailedRows(text) {
+  const found = []
+  const seen = new Set()
+  for (const match of String(text ?? '').matchAll(FAILED_ROW_RE)) {
+    const key = `${match[1]} ${match[2]}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ id: match[1], pkg: match[2] })
+  }
+  return found
+}
+
+/**
+ * 从启动失败输出里解析解析不到的 profile bundle（去重）。
+ *
+ * 这条错误说明 profile 的 node_modules 里那个包不在（没装、或 pnpm 中途被打断
+ * 只留了断链），重装 profile 依赖即可修复——dsh 的报错信息也是这么建议的。
+ */
+export function parseUnresolvedBundles(text) {
+  const found = []
+  const seen = new Set()
+  for (const match of String(text ?? '').matchAll(UNRESOLVED_BUNDLE_RE)) {
+    if (seen.has(match[1])) continue
+    seen.add(match[1])
+    found.push(match[1])
+  }
+  return found
+}

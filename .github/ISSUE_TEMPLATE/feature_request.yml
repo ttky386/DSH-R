@@ -1,0 +1,43 @@
+name: 功能建议
+description: 想要的功能、用起来别扭的地方
+title: '[Feature] '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先说清楚「你要解决什么问题」，比说「加个按钮」有用得多。
+
+        界面长什么样、DSH 本体怎么工作属于上游，见 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 现在卡在哪
+      description: 你正在做什么、哪一步不顺
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎样
+      description: 有具体想法就写；只写目标也行
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你现在怎么绕过
+      description: 临时办法、别的工具怎么做
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 已搜过已有 issue，没有重复
+          required: true

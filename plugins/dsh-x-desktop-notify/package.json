@@ -1,0 +1,63 @@
+{
+  "name": "dsh-x-desktop-notify",
+  "version": "0.1.1",
+  "description": "DSH-X 原生通知桥：会话一轮结束、工具等用户确认时，通过 /api/desktop/notify 发系统原生通知；同时把 notify / open / reveal / clipboard / dialog 五个桌面能力作为 dshDesktop 服务借给其它插件。不在 DSH-X 里跑时静默降级。Native desktop notifications and desktop capabilities for DeepSeek Harness plugins running under the DSH-X Electron shell.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "meta": {
+    "title": "原生通知",
+    "description": "一轮结束、工具等你确认时发系统原生通知；同时把桌面能力借给其它插件。"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "notification",
+    "desktop",
+    "dsh-x"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0"
+    }
+  },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "DSH-X Desktop Notify",
+    "summary": "DSH-X 外壳的原生通知与桌面能力桥：一轮结束、等待确认时发系统通知；notify / open / reveal / clipboard / dialog 作为 dshDesktop 服务供其它插件调用。宿主侧插件，不依赖页面，非 DSH-X 环境静默降级。",
+    "categories": [
+      "通知",
+      "桌面"
+    ],
+    "homepage": "https://github.com/yyh-001/DSH-X"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyh-001/DSH-X.git"
+  },
+  "author": "yyh",
+  "license": "MIT"
+}

@@ -1,0 +1,9060 @@
+import { execFile, spawn, spawnSync } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash, randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
+import { createInterface } from 'node:readline'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { accessSync, chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+import { cmpVer, currentRegistry, describeNpmFailure, installSpec, listPackage, optimizeDependencies, parsePnpmProgress, parseVer } from './registry.js'
+import { VERSION_CHANNEL, VERSION_CHANNELS, effectiveChannel, versionChannel, versionInChannel } from './version.js'
+import { CORE_VERSION } from './app-version.js'
+import { createLogWriter } from './log-writer.js'
+import { checkPluginCompatibility } from './pre-update.js'
+import { createStartupDiagnosis } from './startup-diagnosis.js'
+import { createInstanceLink } from './instance-link.js'
+import { DESKTOP_ENHANCE_ID, DESKTOP_ENHANCE_NAME, DESKTOP_PLUGINS, versionAtLeast } from './desktop-plugins.js'
+import { bindDiagnosis, checkedRepairPlan, profileFingerprint } from './repair-plan.js'
+import { DiagnosticRepairs, verificationSummary } from './repair-actions.js'
+import { recordedChanges } from './repair-evidence.js'
+import { describeDiagnosticCommandFailure } from './diagnostic-command-error.js'
+import {
+  bundleNameOf,
+  disableRowId,
+  dropRowDisables,
+  listPlugins,
+  ensureBundleMounted,
+  ownerOfRow,
+  packageLooksLikeBundle,
+  packageRowIds,
+  parseFailedRows,
+  parseUnresolvedBundles,
+  pluginsNamedInFailure,
+  removeBundleMounted,
+  setPluginEnabled,
+} from './plugins.js'
+import { listMcpServers, probeMcpServer, removeMcpServer, saveMcpServer, setMcpEnabled } from './mcp.js'
+import { latestRecovery, listPatchBackups, restoreProfileBackup, sanitizeProfile, withProfileLock } from './recovery.js'
+import { createMarketStatsReader, marketRepository } from './pack-market.js'
+import {
+  createSkill,
+  installSkillPackages,
+  prepareSkillImport,
+  listSkills,
+  localSkillsEnabled,
+  readSkill,
+  removeSkill,
+  rootDirOf,
+  setLocalSkillsEnabled,
+  setSkillEnabled,
+  skillRoots,
+} from './skills.js'
+import {
+  STORE_TYPES,
+  SYNC_SCOPES,
+  runSync,
+  safeFolderConfig,
+  safeS3Config,
+  safeZipConfig,
+  safeWebdavConfig,
+  storeClient,
+  storeConfigured,
+  storeDisplayUrl,
+  storeMissing,
+} from './sync.js'
+import {
+  MARKET_INDEX_URL,
+  applyInstall,
+  defaultProfileFor,
+  describeSource,
+  exportPack,
+  forgetPack,
+  localized,
+  packSummary,
+  parsePackArchive,
+  parsePackDir,
+  parsePackSource,
+  planInstall,
+  profileSkeleton,
+  readPackState,
+  writePackState,
+  rememberPack,
+  uninstallPack,
+} from './packs.js'
+import {
+  DEFAULT_PORT,
+  DEFAULT_LAUNCH_ID,
+  DEFAULT_UPDATE_CHANNEL,
+  defaultDshHome,
+  ensureSettings,
+  ensureWritableDir,
+  loadSettings,
+  loadSettingsSync,
+  parseArgs,
+  resolveDataDir,
+  resolvePort,
+  resolveProfile,
+  resolveWebBind,
+  safeDataDir,
+  safeDshHome,
+  safeDshHomes,
+  safeDshHomeNames,
+  safeEnvironmentPorts,
+  safeInstancePorts,
+  safeLaunchPresets,
+  safeLaunchIcon,
+  safeLaunchIsolation,
+  safeKeepVersions,
+  safeLang,
+  safeOpenMode,
+  safeSyncSettings,
+  safeTheme,
+  safeUpdateSource,
+  updateSourceForDownload,
+  updateUrlCandidates,
+  safePanelTransparency,
+  safeDownloadSource,
+  safePluginMarketSources,
+  safePort,
+  safeProfile,
+  safeRemoteDshHome,
+  safeRemoteTarget,
+  safeProxyMode,
+  safeProxyUrl,
+  safeRemoteWebBind,
+  safeNodeRuntime,
+  safeSystemNodePath,
+  safeArgs,
+  safeUpdateChannel,
+  safeWebBind,
+  saveSettings,
+  VERSION_RE,
+  DEFAULT_REMOTE_WEB_BIND,
+} from './settings.js'
+// 带代理的 fetch：Node 的全局 fetch 既不看系统代理也不看 HTTP_PROXY，外网请求都走 netFetch
+import { netFetch, proxyEnv, resetProxyCache, resolveProxy } from './proxy.js'
+import { APP_DIR, fileManager } from './filemanager.js'
+import { lanUrlOf, pickLanAddress, startLanProxy } from './lan-proxy.js'
+import { DESKTOP_API_VERSION, DESKTOP_CAPABILITIES, parseDesktopRequest } from './desktop.js'
+import { checkCoreUpdate, downloadCoreTarball, extractCoreTarball, stagingExists, stagingStats } from './core-npm.js'
+import { IN_ELECTRON, IS_LINUX, IS_MAC, IS_WINDOWS, LAUNCHER_NAME, MAC_APP_NAME, NPM_MODE, PACKAGED, RUNTIME_NODE, RUNTIME_NODE_ENV } from './platform.js'
+import {
+  remoteConfigRead,
+  remoteConfigWrite,
+  remoteFileCapabilities,
+  remoteFileList,
+  remoteFileRead,
+  remoteCredentialsList,
+  remoteCredentialSet,
+  remoteCredentialUnset,
+  remoteDependencyCheck,
+  remoteEnvironment,
+  remoteMcpList,
+  remoteMcpProbe,
+  remoteMcpRemove,
+  remoteMcpSave,
+  remoteMcpToggle,
+  remotePackExport,
+  remotePackInstall,
+  remotePackList,
+  remotePackUninstall,
+  remoteProfileCreate,
+  remoteProfileDelete,
+  remoteProfileRecover,
+  remoteProfileRecoverList,
+  remoteProfileRecoverRestore,
+  remoteProfileRename,
+  remoteProfiles,
+  prepareRemoteVersion,
+  remoteIdentityFile,
+  remoteExec,
+  remotePluginInstall,
+  remotePluginRemove,
+  remotePluginToggle,
+  remotePluginUpdate,
+  remotePlugins,
+  remotePairIssue,
+  remotePairStatus,
+  remoteSkillCreate,
+  remoteSkillDetail,
+  remoteSkillInstall,
+  remoteSkillRemove,
+  remoteSkillToggle,
+  remoteSkillsList,
+  remoteSshProbe,
+  remoteStartEntry,
+  remoteState,
+  remoteStopEntry,
+  remoteVersionReplace,
+  remoteVersionOptimize,
+} from './remote-launch.js'
+import {
+  closeRemoteShell,
+  createRemoteShellSession,
+  handleRemoteShellUpgrade,
+  remoteShellSnapshot,
+  resizeRemoteShell,
+  shutdownRemoteShells,
+} from './remote-shell.js'
+
+const execFileAsync = promisify(execFile)
+
+const ROOT = dirname(fileURLToPath(import.meta.url))
+let DATA = resolveDataDir()
+const PUBLIC = join(ROOT, 'public')
+let CONFIG = join(DATA, 'config.json')
+const PKG = '@deepseek-ai/dsh'
+/** 核心版本：读取规则见 app-version.js（源码运行时在 src/ 上一级，打包后在核心根）。 */
+const APP_VERSION = CORE_VERSION
+/** 外壳版本：外壳加载核心前通过 DSH_SHELL_VERSION 传进来；拆包后和核心版本分开走。 */
+const SHELL_VERSION = String(process.env.DSH_SHELL_VERSION || APP_VERSION)
+const APP_REPO = 'yyh-001/DSH-X'
+// 发布页上的安装包名：scripts/pack.mjs 按平台产出同名文件
+const APP_SETUP = IS_MAC ? `DSH-X-mac-${process.arch}.dmg` : 'DSH-Setup.exe'
+// 管理页端口：环境变量 PORT（开发和测试用）优先，其余看设置；启动时 startServer() 再定最终值
+let PORT = resolvePort() || DEFAULT_PORT
+/** 配置的端口被别的程序占用时，往后最多试这么多个端口。 */
+const PORT_SCAN = 20
+
+/** 探端口上是不是我们自己的管理页——用 /api/ping 的身份标记区分「自己的实例」和「别人的程序」。 */
+async function probeManager(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/ping`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(800),
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    return data?.app === 'dsh-x'
+  } catch {
+    return false
+  }
+}
+const SPEC_RE = /^(?:@[a-z0-9._~-]+\/)?[a-z0-9._~-]+(?:@[a-z0-9._~+-]+)?$/i
+const GITHUB_SPEC_RE = /^github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#[\w./-]+)?$/
+/** 本地路径形态的插件源（内置插件走这条）：只认绝对路径，`file:` 后面必须是盘符或 /。 */
+const FILE_SPEC_RE = /^file:(?:[A-Za-z]:[\\/]|\/)[^\0]+$/
+/**
+ * 远端插件源：官方 `dsh plugin add` 能接的 Git / tarball 地址。
+ * 和官方插件管理器一样把地址原样交给 pnpm，由 pnpm 决定能不能拉；
+ * 启动器不在这里替用户下载或执行任何东西（pnpm ≥10 默认也禁用构建脚本）。
+ */
+const REMOTE_SPEC_RE = /^(?:git\+)?(?:https?|ssh|git):\/\/\S+$|^git@[A-Za-z0-9_.-]+:[^\s]+$/
+const READY_RE = /dsh web:\s+(https?:\/\/[^\s]+)/
+const START_TIMEOUT_MS = 120_000
+// 启动 profile：设置页可改，startServer() 里按设置定值
+let PROFILE_NAME = resolveProfile()
+// DSH.exe 命令行上传进来的参数：外壳原样转发给 start.js，这里拼进 dsh
+// 命令行末尾——不再静默忽略。只在经由 start.js 启动时认，免得把测试/开发时
+// node 自己的 argv 误当成用户参数。
+const CLI_ARGS = /start\.js$/i.test(process.argv[1] || '') ? process.argv.slice(2) : []
+// 额外启动参数：用户自己加的 argv，拼在命令行末尾（设置页可改）
+let EXTRA_ARGS = composeExtraArgs(loadSettingsSync().args)
+// Web 绑定方式：loopback（默认）/ lan。两种模式 dsh 都只绑 127.0.0.1；lan 时启动器另在
+// 「局域网 IP + 同一端口」上起反向代理（lan-proxy.js），本机回环和所有探活都不受影响
+let WEB_BIND = resolveWebBind()
+// 远端 DSH 的监听地址与本地 Web 绑定是两个概念：前者直接传给远端 dsh web，
+// 后者只影响本机 DSH-X 启动的本地 DSH。
+let REMOTE_WEB_BIND = safeRemoteWebBind(loadSettingsSync().remoteWebBind || DEFAULT_REMOTE_WEB_BIND)
+// 手工钉死端口的实例（键 `版本@profile` → 端口）：没钉的组合每次启动由系统挑一个。
+// 和 WEB_BIND 一样是「改完立刻生效」的内存副本，启动时与保存设置时各刷新一次。
+let INSTANCE_PORTS = safeInstancePorts(loadSettingsSync().instancePorts)
+// 额外目录的端口表在 defaultHome() 定义之后再填（要判断哪些目录还活着，见 #90）。
+let ENVIRONMENT_PORTS = {}
+// 界面语言（zh / en）：settings.json 为准；lang.txt 只为尚未选择语言的用户提供首次默认值。
+const INSTALL_LANG = join(ROOT, 'lang.txt')
+let LANG = safeLang(loadSettingsSync().lang) || installLang() || 'zh'
+let THEME = safeTheme(loadSettingsSync().theme)
+let PANEL_TRANSPARENCY = safePanelTransparency(loadSettingsSync().panelTransparency)
+let REDUCE_MOTION = loadSettingsSync().reduceMotion === true
+let HIDE_BACKGROUND = loadSettingsSync().hideBackground === true
+let HIDE_BIG_FISH = loadSettingsSync().hideBigFish === true
+// dsh 的用户目录（DSH_HOME）：留空用默认 ~/.dsh。用户把 .dsh 挪到别的盘之后，
+// 在这里指回去，否则启动器会按默认位置重建一个、dsh 也就跑到那份空数据上去了。
+let DSH_HOME_DIR = safeDshHome(loadSettingsSync().dshHome)
+const launchScope = new AsyncLocalStorage()
+const defaultHome = () => DSH_HOME_DIR || defaultDshHome()
+/**
+ * 固定端口只认「还登记过、目录也还在」的环境。旧 DSH_HOME 被删掉/换盘后，
+ * environmentPorts 里那条钉子会把端口永久占住（#90），这里直接把它当不存在。
+ */
+function liveEnvironmentPorts(stored) {
+  const environments = safeEnvironmentPorts(stored?.environmentPorts)
+  const known = [
+    defaultHome(),
+    ...safeDshHomes(stored?.dshHomes),
+    ...safeLaunchPresets(stored?.launchPresets).map((entry) => entry.dshHome).filter(Boolean),
+  ]
+  return Object.fromEntries(Object.entries(environments).filter(([dir]) =>
+    existsSync(dir) && known.some((item) => fileManager.samePath(dir, item))))
+}
+ENVIRONMENT_PORTS = liveEnvironmentPorts(loadSettingsSync())
+const profileKey = (profile) => `${homeDir()}\0${profile}`
+// 启动器更新的下载源：direct（默认直连 GitHub）/ mirror（国内加速，直连失败时走前缀镜像）
+let UPDATE_SOURCE = updateSourceForDownload(loadSettingsSync().downloadSource)
+// 打开 dsh 页面的方式：tab（系统浏览器标签页）/ app（Chromium 应用窗口）/
+// window（独立桌面窗口）/ internal（默认，主窗口标签页；需要外壳报告能力，判断见 openRoute）
+let OPEN_MODE = safeOpenMode(loadSettingsSync().openMode)
+// 是否把 dsh 的 shim 目录写进用户 PATH（默认关，改了要新开终端才生效）
+let SYSTEM_PATH = loadSettingsSync().systemPath === true
+// 右键菜单 / 浏览器控制这两个开关已撤：插件由设置里的「桌面增强 → 一键安装」装，
+// 装完在 dsh 插件页单独开关；侧栏 Browser 始终放开。
+
+/** 安装目录里的 lang.txt（安装程序写的），只认 zh / en。 */
+function installLang() {
+  try {
+    return safeLang(readFileSync(INSTALL_LANG, 'utf8'))
+  } catch {
+    return ''
+  }
+}
+const LOG_DIR = APP_DIR
+const LOG_FILE = join(LOG_DIR, 'manager.log')
+const LOG_MAX_BYTES = 5 * 1024 * 1024
+const NOISY_LOG_RE = /^(?:已安装 \d+\/\d+|已解析 \d+)/
+// 内置 DeepSeek provider 每 10 分钟各刷一次模型目录，成功时打一条 info；只写内存日志，不落盘刷屏。
+// 失败（failed）不在过滤范围内，仍然保留。
+const NOISY_LISTING_RE = /model listing from \S+ loaded \d+ model\(s\), skipped \d+ row\(s\)/
+const logWriter = createLogWriter(LOG_FILE, { maxBytes: LOG_MAX_BYTES })
+/** 每个启动项一份日志：启动时行里的上下文带上 launchId，`pushLog` 顺手 tee 过来。 */
+const LAUNCH_LOG_DIR = join(APP_DIR, 'launch-logs')
+const LAUNCH_LOG_MAX_BYTES = 2 * 1024 * 1024
+const LAUNCH_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const launchLogWriters = new Map()
+function launchLogWriter(id) {
+  let writer = launchLogWriters.get(id)
+  if (!writer) {
+    writer = createLogWriter(join(LAUNCH_LOG_DIR, `launch-${id}.log`), { maxBytes: LAUNCH_LOG_MAX_BYTES })
+    launchLogWriters.set(id, writer)
+  }
+  return writer
+}
+/** 清空某个启动项的原始日志（耗时记录保留，账本和 RSS 还要用）。 */
+function clearLaunchLog(id) {
+  const writer = launchLogWriters.get(id)
+  if (writer) {
+    writer.flush()
+    launchLogWriters.delete(id)
+  }
+  for (const name of [`launch-${id}.log`, `launch-${id}.log.1`]) {
+    try { unlinkSync(join(LAUNCH_LOG_DIR, name)) } catch { /* 没有就算了 */ }
+  }
+}
+
+/** 删除启动项时顺手删掉它自己的日志（分片也一起）。 */
+function dropLaunchLog(id) {
+  const writer = launchLogWriters.get(id)
+  if (writer) {
+    writer.flush()
+    launchLogWriters.delete(id)
+  }
+  for (const name of [`launch-${id}.log`, `launch-${id}.log.1`, `launch-${id}.json`]) {
+    try { unlinkSync(join(LAUNCH_LOG_DIR, name)) } catch { /* 没有就算了 */ }
+  }
+}
+
+/** 记一次启动的阶段耗时（最近 20 次，新的在前），给日志弹窗画分段条。 */
+function recordLaunchRun(id, run) {
+  if (!id || !LAUNCH_ID_RE.test(id)) return
+  const file = join(LAUNCH_LOG_DIR, `launch-${id}.json`)
+  let runs = []
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    if (Array.isArray(parsed?.runs)) runs = parsed.runs
+  } catch {
+    // 第一次启动还没有记录
+  }
+  runs.unshift(run)
+  if (runs.length > 20) runs.length = 20
+  try {
+    mkdirSync(LAUNCH_LOG_DIR, { recursive: true })
+    writeFileSync(file, `${JSON.stringify({ runs }, null, 2)}\n`)
+  } catch {
+    // 记录不是启动的依赖，写不进去只影响可视化
+  }
+}
+process.on('exit', () => {
+  logWriter.flush()
+  for (const writer of launchLogWriters.values()) writer.flush()
+})
+let pendingLogEvents = []
+let logEventTimer = null
+
+const clients = new Set()
+/**
+ * 宿主（拉起本服务的外壳）提供的钩子。默认值对应「子进程 + stdout 标记行」那条老路
+ * （旧 Rust 外壳 DSH.exe 读这几行；它只剩安装引擎，不再跑 dsh）；现在的 Electron 外壳
+ * 和服务在同一个进程，用 setHost 直接换成函数调用，不走管道。
+ */
+let host = {
+  onWake: async () => {},
+  /** 把 dsh 的界面装进外壳主窗口的标签页（openMode=internal）。 */
+  openTab: (tab) => { process.stdout.write(`__DSH_TAB__ ${JSON.stringify(tab)}\n`) },
+  /** 把地址装进外壳的独立 DSH 窗口（openMode=window）。 */
+  openWindow: (url) => { process.stdout.write(`${OPEN_SIGNAL} ${url}\n`) },
+  /** 收尾之后结束服务。外壳同进程时由它决定怎么退（先关窗口、托盘），默认直接退进程。 */
+  exit: (code = 0) => process.exit(code),
+  /** 桌面通知（任务完成 / 失败）。浏览器外壳没有这条通道，默认什么都不做。 */
+  notify: () => {},
+}
+const logs = []
+/**
+ * 正在跑的 dsh 实例，一个「版本 × profile」组合一个（多开）。
+ *
+ * 自动端口首次交给系统挑，之后复用实际就绪地址的端口，保留浏览器权限与站点数据。
+ * 数据是共享的——同一个 DSH_HOME，多开的实例看见同一批会话与记忆；
+ * 插件树按 profile 各是各的。同一个组合再点一次启动只会拿回已经在跑的那个。
+ */
+const instances = new Map()
+const instanceLinks = new Map()
+/** 退出 / 换核心时的收尾阶段：这期间实例退出是预期内的，不用发通知。 */
+let shuttingDown = false
+// 删除环境与启动不能穿插：启动准备期间还没 child，也要算作占用这份 profile。
+const startingProfiles = new Set()
+const maintainingProfiles = new Set()
+let trayInstalledCache = null
+const trayActions = new Map()
+
+/**
+ * 一个实例一个键：`版本@profile`。两边的字符集（VERSION_RE / safeProfile）都不含 @，
+ * 拼起来不会歧义；`proc.key` 记的就是它。
+ */
+function instanceKey(version, profile) {
+  return `${homeDir()}\0${version}@${profile}`
+}
+let installing = null
+let optimizingVersion = null
+let installProgress = null
+// 插件安装/升级的进度（走 dsh 内部的 pnpm，解析方式和 npm 不同，页面按 kind 分给不同的进度条）
+let pluginProgress = null
+let pluginProgressName = ''
+let pluginProgressProfile = ''
+let pluginBusy = false
+let packInstalling = false
+let remoteCache = { at: 0, data: null }
+let selfCache = { at: 0, data: null }
+let server = null
+/** 最近一次启动失败的上下文（错误 + 子进程输出尾巴）。 */
+let lastFailure = null
+/** 最近一次启动后的页面自检结果（客户端插件包是否都拉得动）。 */
+let lastHealth = null
+/** 需要在日志里打码的敏感串（如 API key）。 */
+let secretValues = []
+// 同步：远端配置（S3 桶 / WebDAV 目录，都含密钥）与范围存 settings.json，启动时读一次
+let S3_CONFIG = safeS3Config(loadSettingsSync().s3)
+let WEBDAV_CONFIG = safeWebdavConfig(loadSettingsSync().webdav)
+let FOLDER_CONFIG = safeFolderConfig(loadSettingsSync().folder)
+let ZIP_CONFIG = safeZipConfig(loadSettingsSync().zip)
+let SYNC_OPTIONS = safeSyncSettings(loadSettingsSync().sync)
+/** 正在跑的同步任务：进度、每步在哪个文件，页面靠它画进度条（也进 SSE 重放）。 */
+let syncState = null
+let syncRunning = false
+/** 用户点了「停止」：引擎在每个文件之间看它一眼。 */
+let syncStopRequested = false
+/** 当前这份远端配置（引擎只认这个形状；切换存储类型不用重填另一侧的字段）。 */
+const storeConfig = () => ({
+  store: SYNC_OPTIONS.store,
+  s3: S3_CONFIG,
+  webdav: WEBDAV_CONFIG,
+  folder: FOLDER_CONFIG,
+  zip: ZIP_CONFIG,
+})
+secretValues = [S3_CONFIG.secretAccessKey, S3_CONFIG.sessionToken, WEBDAV_CONFIG.password].filter(Boolean)
+
+/** 把 key 之类的敏感串从任意文本里抹掉（dsh 的凭据常出现在子进程输出里）。 */
+function redact(text, secrets = []) {
+  let out = String(text ?? '')
+  for (const secret of secrets) {
+    if (typeof secret === 'string' && secret.length >= 8) out = out.split(secret).join('sk-***')
+  }
+  return out.replace(/\b(sk|ak)-[A-Za-z0-9_-]{8,}/g, '$1-***')
+}
+
+/** 失败信息里单行输出的上限：node 报错会把出错的那行源码原样打出来，压缩过的包一行能有几百 KB。 */
+const FAILURE_LINE_MAX = 2000
+const DIAGNOSIS_UPDATE_DELAY = 100
+
+/** 终端颜色之类的转义序列：页面不解析它们，原样显示就是一串 [90m 乱码。 */
+const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
+
+/**
+ * 给界面看的启动失败信息：光一句「启动失败」看不出原因，得把 dsh 退出前的输出带上。
+ * 尾巴是子进程的原始输出，没经过 pushLog，所以在这里打码。
+ */
+export function publicFailure(failure, secrets = secretValues) {
+  if (!failure) return null
+  const sanitizeDiagnosis = (value) => {
+    if (typeof value === 'string') {
+      const text = redact(value.replace(ANSI_RE, ''), secrets)
+      return text.length > FAILURE_LINE_MAX ? `${text.slice(0, FAILURE_LINE_MAX)}…` : text
+    }
+    if (Array.isArray(value)) {
+      return value.map(sanitizeDiagnosis)
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDiagnosis(item)]))
+    }
+    return value
+  }
+  return {
+    at: failure.at,
+    version: failure.version,
+    profile: failure.profile ?? null,
+    home: failure.home ?? null,
+    message: redact(failure.message, secrets),
+    exit: failure.exit || null,
+    tail: (failure.tail || []).map((line) => {
+      const text = redact(line, secrets).replace(ANSI_RE, '')
+      return text.length > FAILURE_LINE_MAX ? `${text.slice(0, FAILURE_LINE_MAX)}…` : text
+    }),
+    ...(failure.diagnosis ? { diagnosis: sanitizeDiagnosis(failure.diagnosis) } : {}),
+    ...(failure.binding ? { binding: sanitizeDiagnosis(failure.binding) } : {}),
+  }
+}
+
+/** 记着的那次失败是不是这个「版本 × profile」在当前 dsh 目录下的。 */
+function failureIsFor(version, profile) {
+  return Boolean(lastFailure) && lastFailure.version === version && lastFailure.profile === profile && lastFailure.home === homeDir()
+}
+
+function versionDir(version) {
+  return join(DATA, 'versions', version)
+}
+
+function homeDir() {
+  return launchScope.getStore()?.home || defaultHome()
+}
+
+/** 整合包安装记录和备份也跟着 DSH_HOME 隔离；旧默认目录继续用原位置。 */
+function packDataDir() {
+  return homeDir() === defaultHome() ? DATA : join(DATA, 'environments', createHash('sha256').update(homeDir()).digest('hex').slice(0, 24))
+}
+
+function managedBin(version) {
+  return join(versionDir(version), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+}
+
+function systemNpmRoots() {
+  const roots = []
+  const seen = new Set()
+  const add = (dir) => {
+    if (!dir || seen.has(dir)) return
+    seen.add(dir)
+    roots.push(dir)
+  }
+  if (process.env.APPDATA) add(join(process.env.APPDATA, 'npm', 'node_modules'))
+  if (process.env.LOCALAPPDATA) add(join(process.env.LOCALAPPDATA, 'npm', 'node_modules'))
+  if (process.env.npm_config_prefix) add(join(process.env.npm_config_prefix, 'node_modules'))
+  for (const key of ['ProgramW6432', 'ProgramFiles', 'ProgramFiles(x86)']) {
+    const base = process.env[key]
+    if (base) add(join(base, 'nodejs', 'node_modules'))
+  }
+  add('/usr/local/lib/node_modules')
+  // Apple Silicon 上 Homebrew 的前缀
+  if (IS_MAC) add('/opt/homebrew/lib/node_modules')
+  add(join(homedir(), '.npm-global', 'lib', 'node_modules'))
+  return roots
+}
+
+function detectSystemDsh() {
+  for (const root of systemNpmRoots()) {
+    const pkgRoot = join(root, '@deepseek-ai', 'dsh')
+    const bin = join(pkgRoot, 'lib', 'bin.js')
+    const pkgFile = join(pkgRoot, 'package.json')
+    if (!existsSync(bin) || !existsSync(pkgFile)) continue
+    try {
+      const version = String(JSON.parse(readFileSync(pkgFile, 'utf8')).version || '')
+      if (!VERSION_RE.test(version)) continue
+      return { version, bin, root: pkgRoot }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+function isManaged(version) {
+  return existsSync(managedBin(version))
+}
+
+function binPath(version) {
+  if (isManaged(version)) return managedBin(version)
+  const system = detectSystemDsh()
+  if (system?.version === version) return system.bin
+  return managedBin(version)
+}
+
+function scanInstalled() {
+  const found = []
+  const root = join(DATA, 'versions')
+  if (existsSync(root)) {
+    try {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory() && existsSync(managedBin(entry.name))) found.push(entry.name)
+      }
+    } catch {
+      // ignore unreadable versions dir
+    }
+  }
+  const system = detectSystemDsh()
+  if (system && !found.includes(system.version)) found.push(system.version)
+  return found
+}
+
+/** 小并发跑异步任务，避免一次 stat 几万个文件把句柄打满。 */
+async function mapLimit(items, limit, task) {
+  let index = 0
+  const workers = Array.from({ length: Math.min(limit, items.length || 1) }, async () => {
+    while (index < items.length) {
+      const item = items[index]
+      index += 1
+      await task(item)
+    }
+  })
+  await Promise.all(workers)
+}
+
+/**
+ * 目录的逻辑占用。符号链接跳过：pnpm 的 node_modules 里大量是链接，顺着走会把共享 store
+ * 里的同一份包重复算进每个版本。
+ */
+async function directoryBytes(dir) {
+  let entries
+  try { entries = await readdir(dir, { withFileTypes: true }) } catch { return 0 }
+  const files = []
+  const dirs = []
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue
+    if (entry.isDirectory()) dirs.push(entry.name)
+    else if (entry.isFile()) files.push(entry.name)
+  }
+  // 并发累加不能写 `total += await ...`：两个 worker 会读到同一个旧值，后写的把先写的覆盖掉
+  const sizes = []
+  await mapLimit(files, 32, async (name) => {
+    try { sizes.push((await stat(join(dir, name))).size) } catch { /* 文件刚好被删 */ }
+  })
+  await mapLimit(dirs, 8, async (name) => { sizes.push(await directoryBytes(join(dir, name))) })
+  return sizes.reduce((total, bytes) => total + bytes, 0)
+}
+
+const VERSION_SIZE_TTL_MS = 5 * 60_000
+let versionSizesCache = { at: 0, data: null }
+
+/** .pnpm 目录名 → 包名：`pkg@1.2.3`、`@scope+pkg@1.2.3(peer@x)`。 */
+function pnpmPackageName(entry) {
+  const raw = String(entry).replace(/\(.*$/, '')
+  const at = raw.lastIndexOf('@')
+  return (at > 0 ? raw.slice(0, at) : raw).replace(/\+/g, '/')
+}
+
+/** 一个 node_modules 里各包的大小；pnpm 的 .pnpm 虚拟目录按包名合并，符号链接跳过。 */
+async function packageSizesIn(nodeModules) {
+  const sizes = new Map()
+  // 目录名和 package.json 的 name 不一定一样（平台二进制 wrapper 常见），按真实包名归并，
+  // 这样依赖图（按 package.json 的 name 建）和大小才能对上。
+  const nameOf = (dir, fallback) => {
+    try { return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name || fallback } catch { return fallback }
+  }
+  const add = async (dir, fallback) => {
+    const name = nameOf(dir, fallback)
+    sizes.set(name, (sizes.get(name) || 0) + await directoryBytes(dir))
+  }
+  const entries = await readdir(nodeModules, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue
+    if (entry.name === '.pnpm') {
+      const virtual = await readdir(join(nodeModules, '.pnpm'), { withFileTypes: true }).catch(() => [])
+      for (const item of virtual) {
+        if (item.isSymbolicLink() || !item.isDirectory()) continue
+        const name = pnpmPackageName(item.name)
+        if (!name) continue
+        sizes.set(name, (sizes.get(name) || 0) + await directoryBytes(join(nodeModules, '.pnpm', item.name)))
+      }
+      continue
+    }
+    if (entry.name.startsWith('.') || !entry.isDirectory()) continue
+    if (entry.name.startsWith('@')) {
+      const scoped = await readdir(join(nodeModules, entry.name), { withFileTypes: true }).catch(() => [])
+      for (const sub of scoped) {
+        if (sub.isSymbolicLink() || !sub.isDirectory()) continue
+        await add(join(nodeModules, entry.name, sub.name), `${entry.name}/${sub.name}`)
+      }
+      continue
+    }
+    await add(join(nodeModules, entry.name), entry.name)
+  }
+  return sizes
+}
+
+const STORAGE_BREAKDOWN_TTL_MS = 5 * 60_000
+const storageBreakdownCache = new Map()
+
+/** 包名 → 它声明的依赖名。用来把传递依赖归到引用它的插件头上。 */
+async function packageGraph(nodeModules) {
+  const graph = new Map()
+  const add = async (dir) => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+      if (!pkg?.name) return
+      const deps = new Set([
+        ...(pkg.dependencies ? Object.keys(pkg.dependencies) : []),
+        ...(pkg.optionalDependencies ? Object.keys(pkg.optionalDependencies) : []),
+      ])
+      graph.set(pkg.name, deps)
+    } catch { /* 没有 package.json 的残缺目录 */ }
+  }
+  const entries = await readdir(nodeModules, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('@')) {
+      const scoped = await readdir(join(nodeModules, entry.name), { withFileTypes: true }).catch(() => [])
+      for (const sub of scoped) {
+        if (sub.isSymbolicLink() || !sub.isDirectory()) continue
+        await add(join(nodeModules, entry.name, sub.name))
+      }
+      continue
+    }
+    await add(join(nodeModules, entry.name))
+  }
+  // pnpm 隔离布局：.pnpm/<pkg>@<ver>/node_modules/<pkg>
+  const virtual = await readdir(join(nodeModules, '.pnpm'), { withFileTypes: true }).catch(() => [])
+  for (const item of virtual) {
+    if (item.isSymbolicLink() || !item.isDirectory()) continue
+    const inner = await readdir(join(nodeModules, '.pnpm', item.name, 'node_modules'), { withFileTypes: true }).catch(() => [])
+    for (const sub of inner) {
+      if (sub.isSymbolicLink() || !sub.isDirectory()) continue
+      if (sub.name.startsWith('@')) {
+        const scoped = await readdir(join(nodeModules, '.pnpm', item.name, 'node_modules', sub.name), { withFileTypes: true }).catch(() => [])
+        for (const child of scoped) {
+          if (child.isSymbolicLink() || !child.isDirectory()) continue
+          await add(join(nodeModules, '.pnpm', item.name, 'node_modules', sub.name, child.name))
+        }
+        continue
+      }
+      await add(join(nodeModules, '.pnpm', item.name, 'node_modules', sub.name))
+    }
+  }
+  return graph
+}
+
+/** 每个直接插件能到达哪些包；共用包按引用它的插件数量均摊。 */
+async function attributePlugins(nodeModules, direct, sizes) {
+  const graph = await packageGraph(nodeModules)
+  const parents = new Map()
+  for (const start of direct) {
+    const seen = new Set([start])
+    const queue = [start]
+    while (queue.length) {
+      const current = queue.shift()
+      for (const next of graph.get(current) || []) {
+        if (seen.has(next)) continue
+        seen.add(next)
+        queue.push(next)
+      }
+    }
+    for (const name of seen) {
+      if (name === start) continue
+      const owners = parents.get(name) || new Set()
+      owners.add(start)
+      parents.set(name, owners)
+    }
+  }
+  const totals = new Map()
+  for (const name of direct) totals.set(name, sizes.get(name) || 0)
+  let depsBytes = 0
+  for (const [name, owners] of parents) {
+    if (direct.includes(name)) continue
+    const size = sizes.get(name) || 0
+    if (!size) continue
+    depsBytes += size
+    const share = size / owners.size
+    for (const owner of owners) totals.set(owner, (totals.get(owner) || 0) + share)
+  }
+  const plugins = [...totals.entries()]
+    .map(([name, bytes]) => ({ name, bytes: Math.round(bytes) }))
+    .filter((plugin) => plugin.bytes >= 1)
+    .sort((left, right) => right.bytes - left.bytes)
+  return { plugins, depsBytes }
+}
+
+/**
+ * 一个启动项（版本 + profile）的空间构成：版本目录 + 这个 profile 目录的逻辑大小。
+ * 插件只算 profile 的直接依赖；pnpm 共享 store 不在这些目录里，不重复计入。
+ */
+async function storageBreakdown(version, profile) {
+  const key = `${homeDir()}\0${version}\0${profile}`
+  const cached = storageBreakdownCache.get(key)
+  if (cached && Date.now() - cached.at < STORAGE_BREAKDOWN_TTL_MS) return cached.data
+  const versionPath = versionDir(version)
+  const profilePath = join(homeDir(), 'profiles', safeProfile(profile))
+  const profileNodeModules = join(profilePath, 'node_modules')
+  const [versionBytes, profileBytes, profileNodeModulesBytes, versionPackages, profilePackages] = await Promise.all([
+    directoryBytes(versionPath),
+    directoryBytes(profilePath),
+    directoryBytes(profileNodeModules),
+    packageSizesIn(join(versionPath, 'node_modules')),
+    packageSizesIn(profileNodeModules),
+  ])
+  const sum = (map) => [...map.values()].reduce((totalBytes, bytes) => totalBytes + bytes, 0)
+  const direct = new Set(Object.keys(profileDependencies(profilePath)))
+  const { plugins, depsBytes: pluginDepsBytes } = await attributePlugins(profileNodeModules, [...direct], profilePackages)
+  let pluginOwnBytes = 0
+  for (const name of direct) pluginOwnBytes += profilePackages.get(name) || 0
+  let runtimeBytes = 0
+  let runtimeDepsBytes = 0
+  for (const [name, bytes] of versionPackages) {
+    if (name.startsWith('@deepseek-ai/')) runtimeBytes += bytes
+    else runtimeDepsBytes += bytes
+  }
+  const dataBytes = Math.max(0, profileBytes - profileNodeModulesBytes)
+  const total = versionBytes + profileBytes
+  // 到不了的 profile 包（残留/未声明）和版本目录非 node_modules 的部分都算「未归类」
+  const restBytes = Math.max(0, total - pluginOwnBytes - pluginDepsBytes - runtimeBytes - runtimeDepsBytes - dataBytes)
+  const segments = [
+    { key: 'plugin', bytes: pluginOwnBytes },
+    { key: 'plugin-deps', bytes: pluginDepsBytes },
+    { key: 'runtime', bytes: runtimeBytes },
+    { key: 'runtime-deps', bytes: runtimeDepsBytes },
+    { key: 'data', bytes: dataBytes },
+    { key: 'rest', bytes: restBytes },
+  ].filter((segment) => segment.bytes >= 1)
+  const combined = new Map()
+  for (const [name, bytes] of versionPackages) combined.set(name, { name, bytes, plugin: false })
+  for (const [name, bytes] of profilePackages) {
+    const item = combined.get(name) || { name, bytes: 0, plugin: false }
+    item.bytes += bytes
+    item.plugin = item.plugin || direct.has(name)
+    combined.set(name, item)
+  }
+  const items = [...combined.values()].sort((left, right) => right.bytes - left.bytes).slice(0, 5)
+  const data = { version, profile, total, segments, plugins, items }
+  storageBreakdownCache.set(key, { at: Date.now(), data })
+  return data
+}
+
+function invalidateStorageBreakdown() {
+  storageBreakdownCache.clear()
+}
+
+/** 已装版本各自占多少（只算 DATA/versions 下受管版本；系统全局装的不归启动器管）。 */
+async function versionSizes() {
+  if (versionSizesCache.data && Date.now() - versionSizesCache.at < VERSION_SIZE_TTL_MS) return versionSizesCache.data
+  const versions = scanInstalled().filter(isManaged)
+  const sizes = {}
+  for (const version of versions) sizes[version] = await directoryBytes(versionDir(version))
+  const total = Object.values(sizes).reduce((sum, bytes) => sum + bytes, 0)
+  versionSizesCache = { at: Date.now(), data: { versions: sizes, total } }
+  return versionSizesCache.data
+}
+
+function listedVersions(config) {
+  const onDisk = new Set(scanInstalled())
+  const fromConfig = (config.versions || [])
+    .map((item) => (typeof item === 'string' ? item : item.version))
+    .filter((version) => version && onDisk.has(version))
+  const extra = [...onDisk].filter((version) => !fromConfig.includes(version))
+  return [...fromConfig, ...extra]
+}
+
+function safeVersion(version) {
+  if (typeof version !== 'string' || !VERSION_RE.test(version)) {
+    throw new Error('非法版本号')
+  }
+  return version
+}
+
+/** 保留的版本数：最新的一个 + 最近装的一个（回退用）。 */
+const KEEP_VERSIONS = 2
+
+/**
+ * 装完新版后该留哪几个：刚装的那个 + 版本号最高的，正在跑的一定留。
+ * `versions[0]` 是 install() 刚插到最前面的那个，**不是**「版本号最高的那个」——
+ * 用户可以挑一个旧版本装。只按位置取前两个的话，装旧版就会把最新版删掉。
+ * `running` 收多开的全部实例（历史调用传单个版本号，一起认）。
+ * `pinned` 收启动项需要的版本：钉住的版本（删了那张卡下次启动就得整个重装一遍）
+ * 和每个启动项「当前用/上一次用」的版本（删了回退就没了）——都算「在用」。
+ */
+export function versionsToKeep(versions, running, limit = KEEP_VERSIONS, pinned = []) {
+  if (!versions.length) return new Set()
+  const [installed, ...rest] = versions
+  const ranked = [...rest].sort((a, b) =>
+    cmpVer(parseVer(b) ?? parseVer('0'), parseVer(a) ?? parseVer('0')))
+  const keep = new Set([installed, ...ranked.slice(0, Math.max(0, limit - 1))])
+  for (const version of [...[running ?? []].flat(), ...[pinned ?? []].flat()]) {
+    if (version) keep.add(version)
+  }
+  return keep
+}
+
+/**
+ * 自动清理旧版本：设置里默认开着，只有显式关掉才不清理
+ * （老配置文件里没这个键 = 开着，行为跟以前一样）。
+ */
+export function autoCleanEnabled(settings) {
+  return settings?.autoCleanVersions !== false
+}
+
+/**
+ * 装完新版后按设置保留指定数量；正在运行的版本、启动项钉住的版本额外保留。
+ * 设置里关掉「自动清理旧版本」后一个都不删。
+ * @returns 被清理掉的版本号
+ */
+async function pruneVersions(config) {
+  // 系统全局安装不归启动器清理，也不能占用受管版本的回退名额。
+  const versions = listedVersions(config).filter(isManaged)
+  const settings = await loadSettings()
+  const limit = safeKeepVersions(settings.keepVersions)
+  if (versions.length <= limit) return []
+  if (!autoCleanEnabled(settings)) {
+    pushLog(`自动清理旧版本已关闭，${versions.length} 个已装版本全部保留`)
+    return []
+  }
+  const keep = versionsToKeep(versions, instanceList().map((proc) => proc.version), limit,
+    // 钉住（version ≠ auto）的启动项哪怕没在跑，它要的版本也不能清；
+    // 每个启动项再各自保留「当前用 + 上一次用」两个版本——回退跟着启动项走，不是全局只留两个。
+    (settings.launchPresets ?? []).flatMap((preset) =>
+      [preset.version !== 'auto' ? preset.version : '', preset.usedVersion, preset.prevVersion]).filter(Boolean))
+  const removed = []
+  for (const version of versions) {
+    if (keep.has(version)) continue
+    if (!isManaged(version)) continue // 系统装的 dsh 不归启动器管
+    try {
+      await rm(versionDir(version), { recursive: true, force: true })
+      removed.push(version)
+      pushLog(`清理旧版本 ${version}（保留 ${[...keep].join('、')}）`)
+    } catch (error) {
+      pushLog(`清理 ${version} 失败：${error instanceof Error ? error.message : error}`)
+    }
+  }
+  if (removed.length) {
+    versionSizesCache.at = 0
+    invalidateStorageBreakdown()
+    config.versions = listedVersions(config)
+    await saveConfig(config)
+    for (const version of removed) await dropInstancePorts(version)
+  }
+  return removed
+}
+
+function safeSpec(spec) {
+  const value = typeof spec === 'string' ? spec.trim() : ''
+  if (!value || !(SPEC_RE.test(value) || GITHUB_SPEC_RE.test(value) || FILE_SPEC_RE.test(value) || REMOTE_SPEC_RE.test(value))) {
+    throw new Error('非法插件源')
+  }
+  return value
+}
+
+/**
+ * 页面里输入的插件源：纯本地绝对路径补成 `file:`，其余交给 safeSpec 校验。
+ *
+ * 用户从资源管理器/访达复制来的路径没有 `file:` 前缀；官方 `dsh plugin add`
+ * 也接受裸路径，但统一成 `file:` 后更容易和版本号、Git 地址区分开。反斜杠
+ * 换成斜杠：`file:C:\x` 在 pnpm 的 URL 解析里会把盘符吃掉。
+ */
+function normalizePluginSpec(input) {
+  const value = String(input ?? '').trim()
+  if (!value) throw new Error('请填写插件包名或地址')
+  if (isAbsolute(value)) return safeSpec(`file:${value.replace(/\\/g, '/')}`)
+  return safeSpec(value)
+}
+
+/** profile 清单里的直接依赖（读不到就当空）。 */
+function profileDependencies(profileDir) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
+    return manifest?.dependencies && typeof manifest.dependencies === 'object' ? manifest.dependencies : {}
+  } catch {
+    return {}
+  }
+}
+
+async function loadConfig() {
+  try {
+    return JSON.parse(await readFile(CONFIG, 'utf8'))
+  } catch {
+    return { versions: [] }
+  }
+}
+
+async function saveConfig(config) {
+  trayInstalledCache = null
+  await mkdir(DATA, { recursive: true })
+  await writeFile(CONFIG, JSON.stringify(config, null, 2))
+}
+
+/** 把重要日志追加到 manager.log（进度类噪音行丢弃，超过 5MB 轮转一次）。 */
+function persistLog(text) {
+  if (NOISY_LOG_RE.test(text) || NOISY_LISTING_RE.test(text)) return
+  const line = `[${new Date().toISOString()}] ${text}\n`
+  logWriter.append(line)
+  // 启动项启动/停止期间的行同时落到它自己的日志里；手动启动（没有启动项）只有全局那份。
+  const launchId = launchScope.getStore()?.launchId
+  if (launchId && LAUNCH_ID_RE.test(launchId)) launchLogWriter(launchId).append(line)
+}
+
+function flushLogEvents() {
+  if (logEventTimer !== null) clearTimeout(logEventTimer)
+  logEventTimer = null
+  if (!pendingLogEvents.length) return
+  const lines = pendingLogEvents
+  pendingLogEvents = []
+  emit('log', { lines })
+}
+
+function pushLog(line) {
+  const text = redact(String(line).replace(/\s+$/, ''), secretValues)
+  if (!text) return
+  logs.push(text)
+  if (logs.length > 400) logs.splice(0, logs.length - 400)
+  persistLog(text)
+  // 页面本来就支持 lines；合并 SSE 消息，减少安装/启动日志风暴里的序列化与浏览器回调。
+  if (clients.size) {
+    pendingLogEvents.push(text)
+    if (pendingLogEvents.length >= 100) flushLogEvents()
+    else if (logEventTimer === null) {
+      logEventTimer = setTimeout(flushLogEvents, 40)
+      logEventTimer.unref()
+    }
+  }
+}
+
+function emit(event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  for (const res of clients) res.write(payload)
+}
+
+/**
+ * 启动器自更新：先把新安装包下载到临时目录（带进度），用户确认后再把它用普通界面打开。
+ *
+ * 分工是刻意的：下载这段我们能显示进度（安装包自己的下载页在启动器里看不到），
+ * 交互这段交给安装程序——它能显示自己在装什么、能在需要替换正在运行的文件时提示关闭，
+ * 这些都是我们替它做只会做砸的部分。
+ */
+// 下载好的安装包，等用户点「打开安装程序」再动手
+let stagedUpdate = null
+
+/**
+ * 收拾上一轮更新在临时目录里留下的安装包。
+ *
+ * 装完之后我们已经被安装程序关掉了，没机会删；用户在完成页也可能干脆不勾「删除安装包」。
+ * 所以留给下一次启动：只认自己下载时用的 `DSH-X-update-` 前缀，别处的安装包一律不碰。
+ */
+function cleanStaleUpdates() {
+  let entries = []
+  try {
+    entries = readdirSync(tmpdir())
+  } catch {
+    return
+  }
+  for (const name of entries) {
+    if (!/^DSH-X-update-.+\.(?:exe|dmg)$/i.test(name)) continue
+    try {
+      unlinkSync(join(tmpdir(), name))
+      pushLog(`已清理上次的安装包 ${name}`)
+    } catch {
+      // 还被安装程序占着就随它去，下次启动再说
+    }
+  }
+}
+
+/** 安装包小于这个就肯定不对（错误页、被掐断的半截文件）。 */
+const SELF_UPDATE_MIN_BYTES = 5 * 1024 * 1024
+/** UDIF（.dmg）的尾部是一块 512 字节的 koly 块，开头四个字节就是魔数。 */
+const DMG_TRAILER_BYTES = 512
+const DMG_MAGIC = 'koly'
+
+/** 各平台的安装包：Windows 是 Inno 的 PE 安装程序，macOS 是装着 DSH-X.app 的 dmg。 */
+const SELF_UPDATE_PACKAGE = IS_MAC
+  ? {
+    ext: 'dmg',
+    valid: (buffer) => buffer.subarray(buffer.length - DMG_TRAILER_BYTES, buffer.length - DMG_TRAILER_BYTES + DMG_MAGIC.length).toString('latin1') === DMG_MAGIC,
+  }
+  : { ext: 'exe', valid: (buffer) => buffer[0] === 0x4d && buffer[1] === 0x5a }
+
+/**
+ * macOS 上自更新是「把正在跑的 .app 整个换掉」，所以必须真是从一个能写的 .app 里跑起来的。
+ * 放在下载之前检查：别让用户等完上百 MB 才知道装不了。
+ */
+function assertMacUpdatable() {
+  const bundle = fileManager.appBundle()
+  if (!bundle) throw new Error('从源码运行时不能自更新：请用 git pull 更新，或到发布页下载 dmg')
+  // 没挪进「应用程序」就直接打开的未签名应用会被 Gatekeeper 放到只读的随机路径里（App Translocation）
+  let writable = !bundle.includes('/AppTranslocation/')
+  try {
+    accessSync(dirname(bundle), fsConstants.W_OK)
+  } catch {
+    writable = false
+  }
+  if (!writable) throw new Error(`没有权限替换 ${bundle}：请先把 DSH-X 拖进「应用程序」文件夹，从那里打开后再更新`)
+  return bundle
+}
+
+/**
+ * mac 的增量更新只换 Resources/app，换完必须重签整个 .app。
+ * 只有 ad-hoc / 未签名的包能安全地用 ad-hoc 重签；固定证书签名的包重签会破坏公证，
+ * 直接让用户走完整安装包。返回 { ok, identity } 或 { ok: false, reason, error }。
+ */
+export function macSignatureAllowsIncremental(text) {
+  const output = String(text || '')
+  if (/Signature=adhoc/.test(output)) return { ok: true, identity: '-' }
+  if (/not signed at all/.test(output)) return { ok: true, identity: '-' }
+  return { ok: false, reason: 'signed', error: '当前包使用固定证书签名，增量更新会破坏签名，请用完整安装包' }
+}
+
+function macIncrementalReadiness() {
+  const bundle = fileManager.appBundle()
+  if (!bundle) return { ok: false, reason: 'source' }
+  const result = spawnSync('codesign', ['-dv', '--verbose=4', bundle], { encoding: 'utf8' })
+  return { ...macSignatureAllowsIncremental(`${result.stdout || ''}${result.stderr || ''}`), bundle }
+}
+
+/** URL 的主机名，只用于日志（解析不了就原样返回）。 */
+function safeHost(url) {
+  try {
+    return new URL(url).host
+  } catch {
+    return String(url)
+  }
+}
+
+/**
+ * 第一步：下载 + 校验。进度通过 selfUpdate 事件推给页面。
+ * 下载在服务端进行，页面关掉更新弹窗也不影响；已经下过就直接复用。
+ */
+let selfDownloadInFlight = false
+async function downloadSelfUpdate() {
+  if (selfDownloadInFlight) throw new Error('更新正在下载，请稍候')
+  if (stagedUpdate) return { latest: stagedUpdate.latest, file: stagedUpdate.file, staged: true }
+  selfDownloadInFlight = true
+  try {
+    return await downloadSelfUpdateOnce()
+  } finally {
+    selfDownloadInFlight = false
+  }
+}
+
+async function downloadSelfUpdateOnce() {
+  if (IS_MAC) assertMacUpdatable()
+  const info = await checkSelfUpdate()
+  const target = join(tmpdir(), `DSH-X-update-${info.latest || 'latest'}.${SELF_UPDATE_PACKAGE.ext}`)
+  pushLog(`下载更新${info.latest ? ` ${info.latest}` : ''}…`)
+
+  // 按下载源展开成待试列表：选了「国内加速」先走镜像前缀，直连放最后兜底。
+  // GitHub 在国内经常直接连不上，直连失败就换镜像重来（同一个文件，只是换个入口）。
+  const candidates = updateUrlCandidates(info.url, UPDATE_SOURCE)
+  let res = null
+  let lastError = null
+  for (const [index, url] of candidates.entries()) {
+    try {
+      if (index > 0) pushLog(`上一个源没成功，改用 ${safeHost(url)} 重试`)
+      const attempt = await netFetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10 * 60 * 1000) })
+      if (!attempt.ok) throw new Error(`HTTP ${attempt.status}`)
+      res = attempt
+      break
+    } catch (error) {
+      lastError = error
+    }
+  }
+  if (!res) {
+    const hint = UPDATE_SOURCE === 'mirror' ? '' : '；可以在设置页把「下载源」改成「镜像源」再试'
+    throw new Error(`下载失败：${describeFetchError(lastError, info.url)}${hint}`)
+  }
+  const total = Number(res.headers.get('content-length') || 0)
+  const chunks = []
+  let got = 0
+  let shown = -1
+  for await (const chunk of res.body) {
+    chunks.push(chunk)
+    got += chunk.length
+    emit('selfUpdate', { phase: 'download', done: got, total })
+    if (total) {
+      const pct = Math.floor((got / total) * 100)
+      if (pct >= shown + 10) {
+        shown = pct
+        pushLog(`已下载 ${pct}%`)
+      }
+    }
+  }
+  const buffer = Buffer.concat(chunks)
+  // 只认本平台的安装包格式：拿到的更可能是错误页、或者被掐断的半截文件
+  if (buffer.length < SELF_UPDATE_MIN_BYTES || !SELF_UPDATE_PACKAGE.valid(buffer)) {
+    throw new Error(`下载到的不是安装包（${buffer.length} 字节）`)
+  }
+  await writeFile(target, buffer)
+  stagedUpdate = { latest: info.latest, file: target }
+  pushLog(`更新已就绪：${target}（${(buffer.length / 1048576).toFixed(1)} MB），等用户确认后安装`)
+  emit('selfUpdate', { phase: 'ready', latest: info.latest })
+  return { latest: info.latest, file: target }
+}
+
+/** Windows GUI 安装包独立于启动器运行；新日志有内容才说明安装引擎已开始执行。 */
+export function launchWindowsInstaller(file, logFile, { timeoutMs = 15000 } = {}) {
+  // 每次尝试都从空日志开始，不能把上次更新留下的日志当作这次已启动。
+  try { unlinkSync(logFile) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  const child = spawn(file, ['/silent', `/log=${logFile}`], {
+    cwd: dirname(file),
+    detached: true,
+    stdio: 'ignore',
+    // GUI 安装器会显示更新进度；隐藏窗口会让用户误以为更新没有开始。
+    windowsHide: false,
+  })
+  return new Promise((resolve, reject) => {
+    let timer
+    let settled = false
+    const deadline = Date.now() + timeoutMs
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('exit', onExit)
+      child.unref()
+      if (error) reject(error)
+      else resolve({ pid: child.pid, logFile })
+    }
+    const hasLog = () => {
+      try { return statSync(logFile).size > 0 } catch { return false }
+    }
+    const onExit = (code, signal) => {
+      if ((code === 0 || code === 3010) && hasLog()) finish()
+      else finish(new Error(`安装程序在开始安装前退出（${signal || `退出码 ${code}`}）。日志：${logFile}`))
+    }
+    const check = () => {
+      if (settled) return
+      if (hasLog()) return finish()
+      if (Date.now() >= deadline) {
+        return finish(new Error(`安装程序尚未开始安装，启动器将保持运行。请检查安装程序是否被挂起或拦截。日志：${logFile}`))
+      }
+      timer = setTimeout(check, 100)
+    }
+    child.once('error', (error) => finish(new Error(`安装程序无法启动：${error.message}。日志：${logFile}`)))
+    child.once('exit', onExit)
+    child.once('spawn', check)
+  })
+}
+
+/**
+ * 打开安装程序（静默）然后把自己关掉——等价于 VS Code 的「重启并更新」。
+ *
+ * 为什么要 `/silent`：不静默时，只要还有程序占着要替换的文件，安装程序的 Restart Manager
+ * 那一步就会停在「以下应用程序正在使用将由安装程序更新的文件」这一页，让用户在「自动关闭
+ * 应用程序」和「不要关闭应用程序」之间选一下。`CloseApplications=force` 去不掉这一页——
+ * 官方文档写得很清楚，force 只决定关的时候用不用强制，问还是要问。而静默模式下文档明确写着
+ * Setup「always close and restart such applications」，也就是直接关、不问。
+ *
+ * 退场之前等安装引擎写出新日志：进程名出现在任务列表里不代表它已经执行，Suspended 的
+ * 进程也能被 tasklist 找到。没有就绪证据时保留启动器，给用户看到错误和日志位置。
+ *
+ * 我们自己也退，是为了让 dsh 走正常收尾（而不是被 Restart Manager 直接结束），顺带把浏览器
+ * 里开着的页面收掉。
+ */
+async function installSelfUpdate() {
+  const staged = stagedUpdate
+  if (!staged || !existsSync(staged.file)) throw new Error('更新包还没下载好')
+  if (IS_MAC) return installMacUpdate(staged)
+  const logFile = join(tmpdir(), `DSH-X-install-${process.pid}-${randomBytes(6).toString('hex')}.log`)
+  // 直接拉起 GUI 安装包，不再绕 PowerShell / ShellExecute；独立 argv 可原样传递中文、空格和单引号。
+  // 兼容层保持原样，不人为设置 __COMPAT_LAYER，避免干扰 Inno 的双进程引擎。
+  const installer = await launchWindowsInstaller(staged.file, logFile)
+  pushLog(`安装程序已开始安装：${basename(staged.file)}（PID ${installer.pid}），日志：${logFile}`)
+  return finishSelfUpdate(staged)
+}
+
+/** 安装已经交出去了：通知页面，先让响应发出去，再停 dsh、退出。 */
+function finishSelfUpdate(staged) {
+  emit('selfUpdate', { phase: 'install', latest: staged.latest })
+  // 此时安装目录里已经没有属于我们的进程占着文件了
+  setTimeout(() => {
+    shutdown().finally(() => host.exit(0))
+  }, 900)
+  return { latest: staged.latest, file: staged.file }
+}
+
+/** 等外壳退出的上限：它卡住也照样换（macOS 允许替换正在运行的包），总比永远不装强。 */
+const MAC_SWAP_WAIT_TICKS = 150
+const MAC_SWAP_TICK_SECONDS = 0.2
+
+/**
+ * 换包助手：等外壳和我们都退出，把旧包挪开、新包挪到原位，再打开新版。
+ * 新包就在旧包旁边（同一个卷），两次 mv 都只是改名；第二步失败就把旧包挪回去。
+ * 参数：$1 外壳 pid，$2 我们的 pid，$3 旧包路径，$4 新包路径。
+ */
+const MAC_SWAP_SCRIPT = `
+for pid in "$1" "$2"; do
+  n=0
+  while kill -0 "$pid" 2>/dev/null && [ "$n" -lt ${MAC_SWAP_WAIT_TICKS} ]; do sleep ${MAC_SWAP_TICK_SECONDS}; n=$((n + 1)); done
+done
+rm -rf "$3.old"
+mv "$3" "$3.old" || { echo "move old app failed"; open "$3"; exit 1; }
+if mv "$4" "$3"; then rm -rf "$3.old"; else echo "move new app failed"; mv "$3.old" "$3"; fi
+open "$3"
+`
+
+/**
+ * mac 应用层增量更新的落地助手：等启动器退出 → 备份 Resources/app → 换上新目录 →
+ * 重签整个 .app → open 重启 → 等启动标记；没等到就回滚、重签、重开旧版。
+ * 参数：$1 父进程 pid，$2 app 目录，$3 暂存目录，$4 .app 包，$5 日志，
+ *       $6 启动标记，$7 备份目录，$8 签名身份（- 表示 ad-hoc）。
+ */
+export const MAC_APP_SWAP_SCRIPT = `
+pid=$1; app=$2; staged=$3; bundle=$4; logfile=$5; marker=$6; backup=$7; identity=$8
+log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S')] $*" >>"$logfile" 2>/dev/null; }
+sign() { codesign --force --deep --sign "$identity" "$bundle" >>"$logfile" 2>&1; }
+n=0
+while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 450 ]; do sleep 0.2; n=$((n + 1)); done
+if kill -0 "$pid" 2>/dev/null; then log "父进程 90 秒内没有退出，放弃更新（暂存目录保留，下次可重试）"; exit 1; fi
+rm -f "$marker"
+log "替换 $app"
+rm -rf "$backup"
+if ! mv "$app" "$backup" 2>>"$logfile"; then log "备份失败，放弃更新"; exit 1; fi
+if ! mv "$staged" "$app" 2>>"$logfile"; then log "换入失败，回滚"; mv "$backup" "$app"; open "$bundle"; exit 1; fi
+if ! sign; then
+  log "重新签名失败，回滚"
+  rm -rf "$app"
+  mv "$backup" "$app"
+  sign
+  open "$bundle"
+  exit 1
+fi
+# 包内容变了，旧包的隔离属性会让 Gatekeeper 再拦一次；内容已按签名清单逐个校验过
+xattr -dr com.apple.quarantine "$bundle" >/dev/null 2>&1
+open "$bundle"
+n=0
+while [ "$n" -lt 225 ]; do
+  if [ -f "$marker" ]; then log "新版本启动成功，更新完成"; rm -rf "$backup"; exit 0; fi
+  sleep 0.2; n=$((n + 1))
+done
+log "新版本 45 秒内没有启动成功，开始回滚"
+pkill -f "^$bundle/Contents/MacOS/" >/dev/null 2>&1
+sleep 1
+rm -rf "$app"
+mv "$backup" "$app"
+sign
+open "$bundle"
+exit 1
+`
+
+/**
+ * macOS：挂上 dmg，把新的 DSH-X.app 拷到旧包旁边，再交给换包助手，然后自己退出。
+ *
+ * 拷贝在退出之前做完：挂载、拷贝任何一步出错都还能留在原地报错；真正换包必须等我们退出，
+ * 所以交给一个 detached 的 sh（setsid 之后不随我们一起被收掉）。
+ */
+async function installMacUpdate(staged) {
+  const bundle = assertMacUpdatable()
+  const next = join(dirname(bundle), `.${basename(bundle)}.update`)
+  const mount = mkdtempSync(join(tmpdir(), 'DSH-X-mount-'))
+  pushLog(`挂载更新包 ${basename(staged.file)}`)
+  await execFileAsync('hdiutil', ['attach', '-nobrowse', '-readonly', '-noautoopen', '-mountpoint', mount, staged.file])
+  try {
+    const source = join(mount, MAC_APP_NAME)
+    if (!existsSync(join(source, 'Contents', 'MacOS', LAUNCHER_NAME))) throw new Error(`更新包里没有 ${MAC_APP_NAME}`)
+    await rm(next, { recursive: true, force: true })
+    // ditto 保留权限、符号链接和扩展属性，是拷 .app 的标准做法（cp -R 会弄丢签名需要的东西）
+    await execFileAsync('ditto', [source, next])
+  } finally {
+    await execFileAsync('hdiutil', ['detach', '-quiet', mount])
+      .catch(() => execFileAsync('hdiutil', ['detach', '-force', '-quiet', mount]))
+      .catch((error) => pushLog(`卸载更新包失败：${error?.message || error}`))
+    await rm(mount, { recursive: true, force: true }).catch(() => {})
+  }
+
+  const logFd = openSync(join(tmpdir(), 'DSH-X-install.log'), 'w')
+  // 外壳（Contents/MacOS/DSH）要等它退出才能换包。Electron 外壳和服务是同一个进程，
+  // 父进程是 launchd，等父进程只会白白耗满超时——直接等自己这个进程退出。
+  const shellPid = IN_ELECTRON ? process.pid : process.ppid
+  spawn('/bin/sh', ['-c', MAC_SWAP_SCRIPT, 'dsh-x-update', String(shellPid), String(process.pid), bundle, next], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+  }).unref()
+  closeSync(logFd)
+  pushLog(`新版本已就位，退出后替换 ${bundle}`)
+  return finishSelfUpdate(staged)
+}
+
+/**
+ * 退出前的收尾：停掉跑着的 dsh，再通知开着的页面（浏览器里那些）自己关掉。
+ * 托盘退出和 /api/quit 都走这里。
+ */
+export async function shutdown() {
+  // 等 stopAll 把进程确实收掉再走：这几秒的耐心换的是不留下孤儿 dsh（它一脱离，下次启动
+  // 就会撞上被占着的插件文件和端口，用户还找不到是谁）。上限覆盖「终止 → 强制终止」两段。
+  let timer
+  try {
+    await Promise.race([
+      stopAll(),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, STOP_SHUTDOWN_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+  shutdownRemoteShells()
+  await notifyShutdown()
+}
+
+/**
+ * 退出前通知所有开着的管理页，让它们自己关掉——否则托盘退了，浏览器里还留着
+ * 一个连不上后端的死页面。等最后这段推出去再让调用方结束进程。
+ */
+export function notifyShutdown() {
+  return new Promise((resolve) => {
+    for (const res of clients) {
+      try {
+        res.write('event: bye\ndata: {}\n\n')
+      } catch { /* 这个页面已经断了 */ }
+    }
+    setTimeout(() => {
+      for (const res of clients) {
+        try { res.end() } catch { /* already gone */ }
+      }
+      clients.clear()
+      resolve()
+    }, 150)
+  })
+}
+
+/**
+ * 没有活实例时，显式修改/移除环境意味着放弃尚未回连的重启；先撤销，防止 helper 写回已删目录。
+ * 已回连的继任者还持有进程，必须像正常实例一样先停止，不能把断线或等待收尾当作空闲。
+ */
+function revokeIdleInstanceLinks(matches = () => true) {
+  for (const [key, link] of instanceLinks) {
+    if (instances.has(key) || !matches(link)) continue
+    if (link.pending().length) throw new Error('仍有重启中的实例，请先停止这个环境')
+    link.revoke()
+  }
+}
+
+/** 所有实例（含正在起 / 正在停的），按启动先后。 */
+function instanceList() {
+  return [...instances.values()]
+}
+
+/** 说得上「在跑」的实例：起来中或已经跑起来（正在停的不算）。 */
+function liveInstanceList() {
+  return instanceList().filter((proc) => proc.status === 'running' || proc.status === 'starting')
+}
+
+/**
+ * 读一个进程的常驻内存（RSS，MB）。跨平台各用系统自带的查询，不引原生依赖。
+ *
+ * 只给进程级数字：dsh 的插件都在同一个 Node 进程里，操作系统的 RSS 没有插件维度。
+ *
+ * @param {number} pid - 进程号。
+ * @returns {number|null} MB，读不到时 null。
+ */
+function readProcessRssMB(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  try {
+    if (IS_WINDOWS) {
+      // "DSH.exe","1234","Console","1","123,456 K"
+      const out = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 4000 }).stdout || ''
+      const match = /^"[^"]*","[^"]*","[^"]*","[^"]*","([\d.,]+) K"/m.exec(out)
+      if (!match) return null
+      const kb = Number(match[1].replace(/[.,]/g, ''))
+      return Number.isFinite(kb) ? Math.round(kb / 1024) : null
+    }
+    const out = spawnSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8', windowsHide: true, timeout: 4000 }).stdout || ''
+    const kb = Number(out.trim())
+    return Number.isFinite(kb) && kb > 0 ? Math.round(kb / 1024) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 指名某个用户目录里的 Profile 做「整包」操作：该目录里它有实例在跑、
+ * 或者有人正在改它，都先拒绝。默认目录走 withIdleProfile；跨目录复制 Profile 时
+ * 来源那一份要用它按自己的目录锁（见 createProfile）。
+ */
+async function withIdleProfileIn(home, profile, operation) {
+  const name = safeProfile(profile)
+  const key = `${home}\0${name}`
+  if (startingProfiles.has(key) || instanceList().some((proc) => proc.profile === name && fileManager.samePath(proc.home, home))) {
+    throw new Error(`profile「${name}」仍有实例在运行或启动，请先停止这个环境的全部实例`)
+  }
+  if (maintainingProfiles.has(key) || pluginBusy || syncRunning) {
+    throw new Error('正在修改环境，等操作结束再试')
+  }
+  revokeIdleInstanceLinks(link => link.profile === name && fileManager.samePath(link.home, home))
+  maintainingProfiles.add(key)
+  pluginBusy = true
+  try {
+    const dir = join(home, 'profiles', name)
+    // 已被外部删掉的环境只清安装记录，不能为了拿锁又创建一份空目录。
+    return await (existsSync(dir) ? withProfileLock(dir, operation) : operation())
+  } finally {
+    pluginBusy = false
+    maintainingProfiles.delete(key)
+  }
+}
+
+/** 默认目录里的那份：老调用点都走这里，行为不变。 */
+async function withIdleProfile(profile, operation) {
+  return withIdleProfileIn(homeDir(), profile, operation)
+}
+
+/** rm 会连 lock 一起删除；进程内的占用标记补上这段窗口，避免热加载写回已删目录。 */
+async function editProfile(profile, operation) {
+  const name = safeProfile(profile)
+  if (maintainingProfiles.has(profileKey(name))) throw new Error(`profile「${name}」正在修改，稍后再试`)
+  return withProfileLock(profileDirOf(name), operation)
+}
+
+/** 原生外壳每 1.5 秒轮询一次，版本目录缓存避免为每个启动项重复扫盘。 */
+function trayInstalledVersions() {
+  if (!trayInstalledCache || Date.now() - trayInstalledCache.at >= 15_000) {
+    trayInstalledCache = { at: Date.now(), value: scanInstalled() }
+  }
+  return trayInstalledCache.value
+}
+
+/** 一个实例对外的那一份（页面、托盘都读这个形状）。 */
+function instanceInfo(proc) {
+  return {
+    version: proc.version,
+    profile: proc.profile,
+    home: proc.home,
+    status: proc.status,
+    url: proc.url,
+    // 局域网模式：复制给别的设备用的地址（只换主机，token 不变）；代理没起来时给原因
+    lanUrl: proc.lanProxy ? lanUrlOf(proc.url, proc.lanProxy.lanHost) : '',
+    lanError: proc.lanError || null,
+    startedAt: proc.startedAt,
+    startupMs: proc.startupMs ?? null,
+    startupPhase: proc.status === 'starting' ? (proc.startupPhase || 'launching') : '',
+    diagnosticWarning: publicFailure(proc.diagnosticWarning),
+  }
+}
+
+/**
+ * 直接依赖里，精确钉死 @deepseek-ai/* 版本且不等于当前运行时的包——dsh 启动时会拒载它们。
+ * 只认精确版本（dsh 的兼容检查就是精确比对）；^ / ~ 这类范围不算不兼容。
+ */
+export function incompatibleDirectDeps(profileDir, version) {
+  let manifest = {}
+  try { manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) } catch { /* 空 profile */ }
+  const exact = (range) => /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(String(range))
+  const result = []
+  for (const name of Object.keys(manifest?.dependencies ?? {})) {
+    let pkg = {}
+    try { pkg = JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8')) } catch { continue }
+    const requirements = { ...(pkg.peerDependencies || {}), ...(pkg.dependencies || {}) }
+    const mismatch = Object.entries(requirements).filter(([dep, range]) => dep.startsWith('@deepseek-ai/') && exact(range) && String(range) !== version)
+    if (mismatch.length) result.push({ name, requirements: mismatch.map(([dep, range]) => `${dep}@${range}`) })
+  }
+  return result
+}
+
+/** 方案只引用本管理进程持有的诊断；新启动期间旧失败也不能充当当前证据。 */
+function diagnosticForAttempt(attemptId) {
+  if (typeof attemptId !== 'string' || !/^[a-f0-9]{32}$/.test(attemptId)) {
+    return null
+  }
+  const all = instanceList()
+  const running = all.find(proc => proc.diagnosticContext?.attemptId === attemptId)
+  if (running && running.status !== 'running') {
+    return null
+  }
+  const diagnostic = running?.diagnosticWarning || (lastFailure?.binding?.attemptId === attemptId ? lastFailure : null)
+  if (!diagnostic || startingProfiles.has(`${diagnostic.home}\0${diagnostic.profile}`)) {
+    return null
+  }
+  const replacement = all.find(proc => proc.home === diagnostic.home && proc.profile === diagnostic.profile && proc.version === diagnostic.version)
+  if (replacement && replacement.diagnosticContext?.attemptId !== attemptId) {
+    return null
+  }
+  const currentPaths = launchScope.run({ home: diagnostic.home }, () => ({
+    entry: bootEntry(diagnostic.version, diagnostic.profile),
+    harnessEntry: binPath(diagnostic.version),
+  }))
+  if (currentPaths.entry !== diagnostic.binding.entry || currentPaths.harnessEntry !== diagnostic.binding.harnessEntry) {
+    return null
+  }
+  if (running) {
+    // 输出批次尚未推送时也必须用最新证据，不能让100ms缓存保鲜旧方案。
+    const report = running.diagnosis.report()
+    return { ...diagnostic, diagnosis: report, binding: bindDiagnosis(running.diagnosticContext, report) }
+  }
+  return diagnostic
+}
+
+const REPAIR_OBSERVATION_MS = 2000
+const diagnosticRepairs = new DiagnosticRepairs({
+  dataDir: () => DATA,
+  lookup: diagnosticForAttempt,
+  assertAvailable(target) {
+    if (binPath(target.version) !== target.harnessEntry) {
+      throw new Error('目标运行时位置已变化，请重新诊断。')
+    }
+    const key = `${target.home}\0${target.profile}`
+    if (startingProfiles.has(key) || maintainingProfiles.has(key) || pluginBusy || syncRunning || packInstalling || optimizingVersion) {
+      throw new Error('目标正在启动或修改，稍后重新预览。')
+    }
+    if (instanceList().some(proc => proc.home === target.home && proc.profile === target.profile && (proc.version !== target.version || proc.status === 'stopping'))) {
+      throw new Error('同一 profile 有其他实例使用，禁止修复共享目录。')
+    }
+  },
+  async exclusive(target, operation) {
+    // 来源探针是异步的，取得独占前再同步核对一次，关闭普通启动插入的窗口。
+    diagnosticRepairs.options.assertAvailable(target)
+    const key = `${target.home}\0${target.profile}`
+    if (maintainingProfiles.has(key)) {
+      throw new Error('目标已有修改操作。')
+    }
+    revokeIdleInstanceLinks(link => link.home === target.home && link.profile === target.profile)
+    maintainingProfiles.add(key)
+    try {
+      return await launchScope.run({ home: target.home, confirmedRepair: true }, operation)
+    } finally {
+      maintainingProfiles.delete(key)
+      await emitState()
+    }
+  },
+  async stop(target) {
+    const owned = instanceList().filter(proc => proc.home === target.home && proc.profile === target.profile && proc.version === target.version)
+    await stop(target.version, target.profile, target.home)
+    for (const proc of owned) {
+      try {
+        process.kill(proc.child.pid, 0)
+      } catch (error) {
+        if (error.code === 'ESRCH') {
+          continue
+        }
+      }
+      throw new Error('目标进程尚未确认退出，未修改文件。')
+    }
+  },
+  async verify(target) {
+    let ready = false
+    let message = ''
+    let started
+    try {
+      await startNow(target.version, target.profile, proc => {
+        started = proc
+      })
+      ready = true
+      await new Promise(resolveWait => setTimeout(resolveWait, REPAIR_OBSERVATION_MS))
+    } catch (error) {
+      message = error.message || String(error)
+    }
+    // 复验只读本次真正拉起的进程，不能借同一目标的旧失败或并发实例补齐结果。
+    const context = started?.diagnosticContext
+    if (!context?.attemptId || context.home !== target.home || context.profile !== target.profile || context.version !== target.version) {
+      throw new Error(message || '未取得本次启动的诊断证据，复验未完成。')
+    }
+    const report = started.diagnosis?.report()
+    if (!report) {
+      throw new Error(message || '未取得本次启动的诊断证据，复验未完成。')
+    }
+    const alive = Boolean(instanceList().includes(started) && started.status === 'running' && started.child.exitCode === null)
+    return { ...verificationSummary(ready, alive, report), message, observationMs: REPAIR_OBSERVATION_MS, limitation: '仅复验启动和初始插件诊断；未验证登录、工作区或模型业务。' }
+  },
+  async installationExclusive(target, operation) {
+    const require = createRequire(target.harnessEntry)
+    const { withFileLock } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-atomic-write')))
+    return withFileLock(join(target.home, 'profiles', target.profile, 'package.json'), operation)
+  },
+  async uninstall(target, name) {
+    if (homeDir() !== target.home || binPath(target.version) !== target.harnessEntry) {
+      throw new Error('卸载目标与当前独占范围不一致。')
+    }
+    await runPluginCommand(target.version, ['remove', name], `dsh plugin remove ${name}`, { profile: target.profile, lockedDiagnosticTarget: target })
+  },
+})
+
+/**
+ * 兼容旧接口只认一个地址的地方：最近起来的那个在跑的实例；
+ * 一个都没在跑就退回最近的那个。
+ */
+function primaryInstance() {
+  const live = liveInstanceList()
+  return live[live.length - 1] || instanceList().at(-1) || null
+}
+
+async function snapshot() {
+  return launchScope.run(null, snapshotDefault)
+}
+
+async function snapshotDefault() {
+  const config = await loadConfig()
+  const installed = listedVersions(config)
+  trayInstalledCache = { at: Date.now(), value: installed }
+  const all = instanceList()
+  const stored = await loadSettings()
+  const presets = safeLaunchPresets(stored.launchPresets)
+  const profiles = listProfiles()
+  // 启动项编辑器只提供「起网页」的 profile；sdk/headless/acp 这类 stdio 应用拉不起来
+  const webProfiles = profiles.filter((name) => profileBootsWebIn(defaultHome(), name))
+  return {
+    installing,
+    installed,
+    // 当前 profile（启动下拉的默认值）+ 可选的 profile 列表（模板名 + 磁盘上已有的）
+    profile: PROFILE_NAME,
+    dshHome: defaultHome(),
+    dshHomes: safeDshHomes(stored.dshHomes),
+    dshHomeNames: safeDshHomeNames(stored.dshHomeNames),
+    profiles,
+    webProfiles,
+    profilesByHome: { [defaultHome()]: profiles },
+    webProfilesByHome: { [defaultHome()]: webProfiles },
+    // 手工钉死端口的实例（键 `版本@profile` → 端口）：控制页那个端口输入框回显它
+    instancePorts: INSTANCE_PORTS,
+    launchPresets: presets,
+    // 每种版本类型的实际类型、已装版本、最新版：页面的自动选版本和提醒都读它，不在页面上重新分类
+    channelPlans: channelPlans(installed),
+    instances: all.map(instanceInfo),
+    // 远程实例的单一事实源在远端；这里回显缓存状态，页面重启后仍能显示运行中的远程项。
+    remoteInstances: presets.filter((entry) => entry.remote && remoteRuntimeStates.has(entry.id)).map((entry) => ({
+      ...remoteTabTarget(entry, remoteRuntimeStates.get(entry.id), entry.name),
+      version: remoteRuntimeStates.get(entry.id)?.version || entry.usedVersion || '',
+      profile: entry.profile,
+      home: entry.dshHome || '',
+      host: entry.remote.host,
+      user: entry.remote.user,
+      launchId: entry.id,
+      probe: remoteRuntimeStates.get(entry.id)?.probe || null,
+    })),
+    remoteLaunches: presets.filter((entry) => entry.remote).map((entry) => {
+      const runtime = remoteRuntimeStates.get(entry.id) || null
+      return {
+        id: entry.id,
+        name: entry.name,
+        version: runtime?.version || entry.usedVersion || entry.version,
+        profile: entry.profile,
+        dshHome: entry.dshHome || '',
+        remote: entry.remote,
+        status: runtime?.alive === false || !runtime ? 'stopped' : 'running',
+        url: runtime?.url || '',
+        probe: runtime?.probe || null,
+        serviceOk: runtime?.probe ? runtime.probe.ok === true : Boolean(runtime?.alive && runtime?.url),
+        error: remoteRuntimeErrors.get(entry.id) || '',
+        reachable: !remoteRuntimeErrors.has(entry.id),
+      }
+    }),
+    versions: installed.map((version) => {
+      // 同一个版本的实例可能不止一个（多开下只会有一个，聚合起来更稳）：跑着的优先，
+      // 地址给第一个跑起来的那个
+      const procs = all.filter((proc) => proc.version === version)
+      const live = procs.find((proc) => proc.status === 'running' || proc.status === 'starting')
+      const chosen = live || procs[0]
+      return {
+        version,
+        managed: isManaged(version),
+        status: chosen ? chosen.status : 'stopped',
+        url: chosen?.url ?? null,
+      }
+    }),
+    // 只认一个地址的老地方（托盘、外壳窗口）读 running：多开时它是最近起来的那个在跑的实例
+    running: (() => {
+      const proc = primaryInstance()
+      return proc ? { version: proc.version, status: proc.status, url: proc.url } : null
+    })(),
+    autoFix: autoFixForHome(),
+    // 外观设置：设置页可能开在**另一个标签页**里，改完只有那一页自己换了主题，
+    // 管这个窗口的那一页（标签条、卡片、水面背景）要等整页刷新才跟上。
+    // 把这一组放进状态里，页面收到推送就能自己跟，不用刷新。
+    appearance: {
+      theme: THEME,
+      panelTransparency: PANEL_TRANSPARENCY,
+      reduceMotion: REDUCE_MOTION,
+      hideBackground: HIDE_BACKGROUND,
+      hideBigFish: HIDE_BIG_FISH,
+    },
+    health: lastHealth,
+    failure: publicFailure(lastFailure),
+    // 安全启动移走配置层之后，首页提示行也要能给出还原入口（#88）
+    recovery: recoveryPayload(),
+    diagnosticRepairs: publicFailure({ message: '', diagnosis: diagnosticRepairs.history().map(record => ({ ...record, recorded: recordedChanges(record) })) }).diagnosis,
+    dataDir: DATA,
+    progress: installProgress,
+    pluginProgress: pluginProgress ? { ...pluginProgress, name: pluginProgressName, profile: pluginProgressProfile } : null,
+    sync: syncState,
+    syncRunning,
+  }
+}
+
+async function applyDataDir(dir) {
+  // 先确认真的能写（含已存在但只读的目录），失败就带着人话抛出，DATA 保持不变
+  await ensureWritableDir(dir)
+  DATA = dir
+  CONFIG = join(DATA, 'config.json')
+  trayInstalledCache = null
+  pushLog(`版本目录 ${DATA}`)
+}
+
+async function publicSettings() {
+  const stored = await loadSettings()
+  return {
+    dataDir: DATA,
+    dshHome: homeDir(),
+    dshHomes: safeDshHomes(stored.dshHomes),
+    dshHomeNames: safeDshHomeNames(stored.dshHomeNames),
+    // 设置里填的原文（空 = 用默认位置）+ 默认位置，页面据此回显与提示
+    dshHomeValue: safeDshHome(stored.dshHome),
+    dshHomeDefault: defaultDshHome(),
+    // port 是配置值（重启后生效），listenPort 是当前真正在监听的端口
+    port: stored.port ?? DEFAULT_PORT,
+    listenPort: PORT,
+    portDefault: DEFAULT_PORT,
+    autoStart: await fileManager.autoStartEnabled(),
+    pluginMarketSources: safePluginMarketSources(stored.pluginMarketSources),
+    autoDisablePlugins: stored.autoDisablePlugins !== false,
+    autoCleanVersions: autoCleanEnabled(stored),
+    keepVersions: safeKeepVersions(stored.keepVersions),
+    downloadSource: safeDownloadSource(stored.downloadSource),
+    downloadSources: [
+      { id: 'mirror', label: '镜像源' },
+      { id: 'official', label: '官方源' },
+    ],
+    openMode: safeOpenMode(stored.openMode),
+    // 选了独立桌面窗口但当前没有原生外壳（源码运行）时，页面要如实说明会落到标签页
+    openModeWindow: openRoute(OPEN_MODE, shellWindowHost()) === 'window',
+    openModeInternal: internalTabsHost(),
+    openModes: [
+      { id: 'tab', label: '浏览器标签页' },
+      { id: 'app', label: '浏览器独立窗口' },
+      { id: 'window', label: '独立桌面窗口' },
+      { id: 'internal', label: 'DSH-X 内部标签页' },
+    ],
+    systemPath: SYSTEM_PATH,
+    systemBinDir: systemBinDir(),
+    systemPathMode: IS_WINDOWS ? 'automatic' : 'manual',
+    systemPathCommand: manualPathCommand(systemBinDir()),
+    // 跑 dsh 用哪个 node：设置值 + 现在生效的 + 系统里找到的那个（页面据此画提示行）
+    nodeRuntime: safeNodeRuntime(stored.nodeRuntime),
+    systemNodePath: safeSystemNodePath(stored.systemNodePath),
+    nodeRuntimeInfo: nodeRuntimeView(stored),
+    updateSource: updateSourceForDownload(stored.downloadSource),
+    updateSources: [
+      { id: 'mirror', label: '国内加速（先走镜像，连不上再直连）' },
+      { id: 'direct', label: '只直连（不用镜像）' },
+    ],
+    // 网络代理：模式 + 手动地址 + 「现在实际在用哪个」（探测结果，页面拿它显示提示行）。
+    // 探测不到时 proxyInUse.url 是空的，note/detail 说明原因（socks-only 之类，页面自己翻译）。
+    proxyMode: safeProxyMode(stored.proxyMode),
+    proxyUrl: stored.proxyUrl || '',
+    proxyModes: [
+      { id: 'system', label: '跟随系统' },
+      { id: 'manual', label: '手动填写' },
+      { id: 'off', label: '不走代理' },
+    ],
+    proxyInUse: resolveProxy(stored),
+    profile: PROFILE_NAME,
+    profiles: listProfiles(),
+    launchPresets: safeLaunchPresets(stored.launchPresets),
+    // 回显用户填的原文（带引号），不能回显 parse 后的数组，否则含空格的值再存一次就被拆开了
+    args: stored.args ?? '',
+    lang: LANG,
+    theme: THEME,
+    // 上次新建启动项选的隔离档，页面打开「添加启动项」时默认停在它上面
+    launchIsolation: safeLaunchIsolation(stored.launchIsolation),
+    panelTransparency: PANEL_TRANSPARENCY,
+    reduceMotion: REDUCE_MOTION,
+    hideBackground: HIDE_BACKGROUND,
+    hideBigFish: HIDE_BIG_FISH,
+    // 桌面端系统开关的当前值。外壳直接读 settings.json（见 shell/prefs.mjs），这里只是给页面回显；
+    // shellPrefs 表明当前外壳懂这组设置（旧外壳不认，页面据此提示更新）。
+    hardwareAcceleration: stored.hardwareAcceleration !== false,
+    autoUpdate: stored.autoUpdate === true,
+    taskNotifications: stored.taskNotifications !== false,
+    notificationSound: stored.notificationSound !== false,
+    closeToTray: stored.closeToTray !== false,
+    keepAwake: stored.keepAwake === true,
+    // 内置浏览器（右侧栏浏览器）：开关与证书策略。browserHost 表明当前外壳能否清理浏览数据
+    // （只有 Electron 外壳拿得到 guest 分区；浏览器里打开管理页 / 旧外壳没有这层能力）。
+    browserIgnoreCertificate: stored.browserIgnoreCertificate === true,
+    browserHost: Boolean(host.browser),
+    shellPrefs: process.env.DSH_SHELL_PREFS === '1',
+    desktopShell: shellWindowHost(),
+    webBind: WEB_BIND,
+    remoteWebBind: REMOTE_WEB_BIND,
+  }
+}
+
+/**
+ * 给一个实例（版本 × profile）钉死端口，或取消钉（端口填空 / 0）。
+ *
+ * 只校验「能不能钉」：端口本身合法、没和管理页撞、没和别的组合撞、这份 profile 真的
+ * 会起 web（不起 web 的 profile 没有 HTTP 服务，端口对它没有意义——传给它反而会被
+ * 它自己的 CLI 打回 unknown option）。端口此刻有没有被别的程序占着不作拦截：那可能是
+ * 用户马上要关掉的东西，只是把结论以 busy 回给页面（页面上只说问题）。
+ */
+async function setInstancePort(version, profile, port) {
+  return withLaunchPresetWrite(() => setInstancePortNow(version, profile, port))
+}
+
+async function setInstancePortNow(version, profile, port) {
+  const ver = safeVersion(version)
+  const prof = safeProfile(profile)
+  const key = `${ver}@${prof}`
+  const home = homeDir()
+  const extra = home !== defaultHome()
+  const map = { ...(extra ? ENVIRONMENT_PORTS[home] : INSTANCE_PORTS) }
+  const savePorts = async (next) => {
+    const saved = await saveSettings(extra
+      ? { environmentPorts: { ...ENVIRONMENT_PORTS, [home]: next } }
+      : { instancePorts: next })
+    INSTANCE_PORTS = safeInstancePorts(saved.instancePorts)
+    ENVIRONMENT_PORTS = liveEnvironmentPorts(saved)
+  }
+  const text = String(port ?? '').trim()
+  if (!text || Number(text) === 0) {
+    await savePorts(mapWithout(map, key))
+    pushLog(`取消固定端口：${key}`)
+    await emitState()
+    return { key, port: 0, busy: false }
+  }
+  const value = safePort(text)
+  if (!bootsWebApp(prof)) throw new Error(`profile ${prof} 不起 web 应用，端口对它没用`)
+  let configured = 0
+  try { configured = safePort(loadSettingsSync().port) } catch { configured = DEFAULT_PORT }
+  if (value === PORT || value === configured) {
+    throw new Error(`端口 ${value} 是管理页自己在用的，换一个`)
+  }
+  const allPorts = [
+    ...Object.entries(INSTANCE_PORTS).map(([other, otherPort]) => [defaultHome(), other, otherPort]),
+    ...Object.entries(ENVIRONMENT_PORTS).flatMap(([dir, ports]) => Object.entries(ports).map(([other, otherPort]) => [dir, other, otherPort])),
+  ]
+  // 启动项换了 DSH 版本后，它上次启动用的旧版本（usedVersion / prevVersion）还钉着这个端口：
+  // 那是同一个启动项留下的，跟着版本挪过来，而不是拦住启动。别的组合钉着的端口照旧拒绝。
+  const launch = safeLaunchPresets(loadSettingsSync().launchPresets).find((item) => item.id === launchScope.getStore()?.launchId)
+  const moved = launch?.profile === prof
+    ? [launch.usedVersion, launch.prevVersion].filter(Boolean).map((used) => `${used}@${prof}`)
+      .filter((other) => other !== key && map[other] === value)
+    : []
+  const taken = allPorts.find(([dir, other, otherPort]) => otherPort === value && !(dir === home && (other === key || moved.includes(other))))
+  if (taken) throw new Error(`端口 ${value} 已经钉给 ${taken[1]}（${taken[0]}）了，换一个`)
+  for (const other of moved) delete map[other]
+  map[key] = value
+  await savePorts(map)
+  pushLog(`固定端口：${key} → ${value}（下次启动生效）${moved.length ? `，从 ${moved.join('、')} 挪过来` : ''}`)
+  await emitState()
+  const ours = instanceOnPort(value)
+  return { key, port: value, busy: !ours && !(await portAvailable(value)) }
+}
+
+/**
+ * 每种版本类型（键是启动项选的类型）的「计划」：实际生效的类型（选的类型一个已知版本都没有时
+ * 退到更不稳定的一档，见 version.js 的 effectiveChannel）、它收的已装版本（从高到低）、
+ * 它收的最新已发布版本。自动选版本、卡片的「新版本」、启动时的更新提示都只读这一份，
+ * 三处口径不会各算各的。远端只读缓存、不联网：还没拉过就只按已装版本算，latest 为空。
+ */
+function channelPlans(installed) {
+  const published = remoteCache.data?.versions || []
+  const known = [...installed, ...published]
+  return Object.fromEntries(VERSION_CHANNELS.map((selected) => {
+    const channel = effectiveChannel(selected, known)
+    return [selected, {
+      channel,
+      installed: installed.filter((version) => versionInChannel(channel, version))
+        .sort((a, b) => cmpVer(parseVer(b), parseVer(a))),
+      latest: remoteCache.data ? latestRemoteFor(remoteCache.data, (version) => versionInChannel(channel, version)) : '',
+    }]
+  }))
+}
+
+/** 启动项只是已有实例参数的命名入口；固定端口继续走同一套校验和设置。 */
+/**
+ * 启动项「auto」实际会解析到的版本：只在启动项的版本类型（按 channelPlans 退档后的）里挑——
+ * 同 profile/目录下在跑的优先（多个取最高），否则已装的最高版本；两者都没有就返回空串
+ * （首次启动才下载，跟明写版本比不出重复）。类型以外的版本哪怕更高、正在跑也不用。
+ * 客户端 recommendedVersion 的服务端镜像——查重必须用解析后的版本。
+ */
+function resolvePresetVersion(entry, home, config, versions = null) {
+  if (entry.version !== 'auto') return entry.version
+  const plan = channelPlans(versions || listedVersions(config).filter((ver) => existsSync(binPath(ver))))[safeUpdateChannel(entry.updateChannel)]
+  const live = liveInstanceList().filter((item) => item.profile === entry.profile && (item.home || defaultHome()) === home
+    && versionInChannel(plan.channel, item.version))
+    .sort((a, b) => cmpVer(parseVer(b.version), parseVer(a.version)))[0]
+  return live?.version || plan.installed[0] || ''
+}
+
+/**
+ * 托盘要的状态文本（外壳每 1.5s 取一次）。外壳和核心同进程时直接调用，
+ * 不用再绕一圈本机 HTTP；`/api/tray` 仍然保留，浏览器外壳和旧外壳照旧读它。
+ */
+export function trayStateText() {
+  // 保留旧外壳的标量字段；新外壳按命名启动项操作，不再把单项停止变成停止全部。
+  const running = primaryInstance()
+  const launches = trayLaunches()
+  // 外壳标签条只跟 instances= 走。远程 DSH 不在本机进程表里，但同样有稳定 id 与带
+  // token 的 URL；不合并进去的话，内部标签打开后下一轮轮询就会被误换成“实例已停止”。
+  const trayInstances = [
+    ...instanceList().map((proc) => internalTabTarget(proc, launches.find((row) => row.proc === proc)?.name)),
+    ...launches.filter((row) => row.preset?.remote && row.target?.url && row.status === 'running')
+      .map((row) => row.target),
+  ]
+  return [
+    `status=${running?.status || 'stopped'}`,
+    `url=${running?.url || ''}`,
+    `installed=${trayInstalledVersions().length ? 1 : 0}`,
+    `lang=${LANG}`,
+    // 托盘照着它决定「打开 DSH」是叫内嵌窗口还是丢给系统浏览器
+    `openmode=${OPEN_MODE}`,
+    // 本次是不是由原生外壳托管：外壳缺失时窗口模式不成立，托盘据此退回浏览器
+    `shell=${shellWindowHost() ? 1 : 0}`,
+    `theme=${THEME}`,
+    // 原生标签页要跟随所有实例，不能用「最近启动的实例」去覆盖用户正在看的其他页面。
+    `instances=${JSON.stringify(trayInstances)}`,
+    `launches=${JSON.stringify(launches.map(({ id, instanceId, name, version, profile, status, busy, installed, target }) => ({ id, instanceId, name, version, profile, status, busy, installed, target })))}`,
+  ].join('\n')
+}
+
+/** 删除入口不会停止实例；这类运行项仍要能从托盘找回和单独停止。 */
+function trayLaunches() {
+  const versions = trayInstalledVersions()
+  const all = instanceList()
+  const matched = new Set()
+  const presets = safeLaunchPresets(loadSettingsSync().launchPresets)
+  const rows = presets.map((preset) => {
+    if (preset.remote) {
+      const remoteState = remoteRuntimeStates.get(preset.id)
+      const target = remoteTabTarget(preset, remoteState, preset.name)
+      return {
+        id: preset.id,
+        name: preset.name,
+        version: remoteState?.version || preset.usedVersion || preset.version,
+        profile: preset.profile,
+        home: preset.dshHome || '',
+        preset,
+        proc: null,
+      }
+    }
+    const home = preset.dshHome || defaultHome()
+    const pending = [...trayActions.values()].find((item) => item.id === preset.id && item.home === home && item.profile === preset.profile)
+    // 自动版本重启途中暂时没有实例，继续显示原版本，避免跳到最高已装版本。
+    const version = pending?.version || resolvePresetVersion(preset, home, null, versions)
+    const proc = all.find((item) => item.home === home && item.version === version && item.profile === preset.profile)
+    if (proc) matched.add(proc)
+    return { id: preset.id, name: preset.name, version, profile: preset.profile, home, preset, proc }
+  })
+  for (const proc of all) {
+    if (!matched.has(proc)) rows.push({ id: `instance:${internalTabTarget(proc).id}`, name: `${proc.profile} · ${proc.version}`, version: proc.version, profile: proc.profile, home: proc.home, proc })
+  }
+  for (const pending of trayActions.values()) {
+    if (!rows.some((row) => row.id === pending.id)) rows.push({ ...pending, proc: null })
+  }
+  return rows.map((row) => {
+    const key = row.preset?.remote
+      ? JSON.stringify(['remote', row.preset.remote.host, row.preset.remote.user, row.home, row.version, row.profile])
+      : JSON.stringify([row.home, row.version, row.profile])
+    const pending = trayActions.get(key)
+    if (row.preset?.remote) {
+      const remoteState = remoteRuntimeStates.get(row.id)
+      const target = remoteTabTarget(row.preset, remoteState, row.name)
+      return { ...row, key, instanceId: key, status: target.status, busy: Boolean(pending), installed: true, target }
+    }
+    return { ...row, key, instanceId: key, status: pending?.status || row.proc?.status || 'stopped', busy: Boolean(pending), installed: versions.includes(row.version), target: row.proc ? internalTabTarget(row.proc, row.name) : null }
+  })
+}
+
+/** 实例所属启动项的名称（标签标题用）；没有对应启动项时返回空串。 */
+function launchNameOf(instance) {
+  return trayLaunches().find((row) => row.proc === instance)?.name || ''
+}
+
+async function remoteLaunchEntry(id) {
+  const entry = safeLaunchPresets((await loadSettings()).launchPresets).find((item) => item.id === String(id || ''))
+  if (!entry?.remote) throw new Error('远程启动项已不存在，请刷新后重试')
+  return entry
+}
+
+/**
+ * 远端版本被删掉后，不能让本地启动项继续钉着它；否则下一次启动又把旧版本装回来，
+ * 用户看到的就是“删不掉/替换不了”。这里把同一远端目标里引用该版本的启动项切回 auto，
+ * 并清掉 usedVersion/prevVersion 这两个历史缓存。
+ */
+async function detachRemoteVersion(target, dshHome, version) {
+  const saved = await saveSettings((current) => {
+    const presets = safeLaunchPresets(current.launchPresets).map((entry) => {
+      if (!entry.remote || entry.remote.host !== target.host || entry.remote.user !== target.user
+        || (entry.dshHome || '') !== dshHome) return entry
+      if (entry.version !== version && entry.usedVersion !== version && entry.prevVersion !== version) return entry
+      const next = { ...entry, version: 'auto' }
+      delete next.usedVersion
+      delete next.prevVersion
+      return next
+    })
+    return { launchPresets: presets }
+  })
+  await emitState()
+  return safeLaunchPresets(saved.launchPresets).filter((entry) => entry.remote
+    && entry.remote.host === target.host && entry.remote.user === target.user && (entry.dshHome || '') === dshHome)
+}
+
+// 远程实例不在本地 process 表里；这份缓存给内部标签页、托盘和首页一个稳定身份。
+// 每 30 秒再通过 SSH 对事实，管理器重启后也能自动找回来。
+const remoteRuntimeStates = new Map()
+let remoteRuntimeRefreshedAt = 0
+let remoteRuntimeRefresh = null
+const remoteRuntimeErrors = new Map()
+
+function remoteTabTarget(entry, state = remoteRuntimeStates.get(entry.id), name = '') {
+  // 进程活着但 token 首跳 401/连接失败时，不能把旧 URL 交给内部标签页。
+  const alive = state?.alive !== false && Boolean(state?.url) && state?.probe?.ok !== false
+  return {
+    id: JSON.stringify([`remote:${entry.remote.host}:${entry.remote.user}`, entry.dshHome || '', entry.version || '', entry.profile]),
+    title: name || entry.name || `${entry.remote.host} · ${entry.profile}`,
+    url: state?.url || '',
+    status: alive ? 'running' : 'stopped',
+    managed: true,
+    remote: true,
+  }
+}
+
+function rememberRemoteRuntime(entry, state) {
+  if (state?.alive === false) remoteRuntimeStates.delete(entry.id)
+  // 外部接管的进程可能没有 token URL，但仍然是“运行中”，不能丢进 stopped。
+  else if (state?.url || state?.managed === false) remoteRuntimeStates.set(entry.id, state)
+  else remoteRuntimeStates.delete(entry.id)
+}
+
+async function refreshRemoteRuntimeStates({ force = false } = {}) {
+  if (!force && remoteRuntimeRefreshedAt + 30_000 > Date.now()) return remoteRuntimeRefresh
+  if (remoteRuntimeRefresh) return remoteRuntimeRefresh
+  remoteRuntimeRefreshedAt = Date.now()
+  remoteRuntimeRefresh = (async () => {
+    const entries = safeLaunchPresets((await loadSettings()).launchPresets).filter((item) => item.remote)
+    await Promise.all(entries.map(async (entry) => {
+      try {
+        const result = await remoteState(entry.remote, entry.id, await remoteLaunchOptions())
+        if (result?.state) rememberRemoteRuntime(entry, { ...result.state, probe: result.probe })
+        remoteRuntimeErrors.delete(entry.id)
+      } catch (error) {
+        // SSH 暂时不可达不能把仍在远端跑的进程标成停止；保留上次事实。
+        // 同一个错误 30 秒轮询一次会刷屏；只在错误变化时记录，恢复后清掉。
+        const message = error instanceof Error ? error.message : String(error)
+        if (remoteRuntimeErrors.get(entry.id) !== message) {
+          remoteRuntimeErrors.set(entry.id, message)
+          pushLog(`读取远程「${entry.name}」状态失败：${message}`)
+        }
+      }
+    }))
+    await emitState()
+  })().finally(() => {
+    remoteRuntimeRefresh = null
+  })
+  return remoteRuntimeRefresh
+}
+
+async function remoteLaunchOptions() {
+  const stored = await loadSettings()
+  return {
+    bind: safeRemoteWebBind(stored.remoteWebBind || DEFAULT_REMOTE_WEB_BIND),
+    source: safeDownloadSource(stored.downloadSource),
+    registry: safeDownloadSource(stored.downloadSource) === 'official' ? 'https://registry.npmjs.org' : 'https://registry.npmmirror.com',
+  }
+}
+
+/**
+ * 只在本机进程内存里读一次 DSH 官方凭据库，用于把已有 API Key 同步到用户显式添加的
+ * 远程 Linux。它不进设置、不进日志，也不会通过任何 GET 接口返回。
+ */
+function localDshCredentialRef(name) {
+  const key = String(name || '')
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return ''
+  const file = join(homeDir(), '.credentials.yaml')
+  let text = ''
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    // 本机没有官方凭据库时允许环境变量兜底；仍然只在本次启动远程时使用。
+    return String(process.env[key] || '').trim()
+  }
+  let section = ''
+  for (const line of text.split(/\r?\n/)) {
+    const top = /^([A-Za-z_][A-Za-z0-9_]*):(?:\s|$)/.exec(line)
+    if (top) {
+      section = top[1]
+      continue
+    }
+    if (section !== 'refs') continue
+    const match = /^ {2}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(line)
+    if (!match || match[1] !== key) continue
+    let value = match[2].trim()
+    const comment = value.indexOf(' #')
+    if (comment >= 0) value = value.slice(0, comment).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1)
+    return value
+  }
+  return String(process.env[key] || '').trim()
+}
+
+async function ensureRemoteDshCredentials(entry, options, { allowMissing = false } = {}) {
+  const list = await remoteCredentialsList(entry.remote, entry.dshHome || '', options)
+  const wanted = list.refs?.find((item) => item.name === 'DEEPSEEK_API_KEY')
+  if (wanted?.source === 'stored') return { configured: true, synced: false, credentials: list }
+  const value = localDshCredentialRef('DEEPSEEK_API_KEY')
+  if (value) {
+    // 本机已有官方凭据库引用时自动带到远端；secret 只走 SSH stdin，不落 Windows 设置。
+    const next = await remoteCredentialSet(entry.remote, entry.dshHome || '', 'DEEPSEEK_API_KEY', value, options)
+    return { configured: true, synced: true, credentials: next }
+  }
+  if (allowMissing) return { configured: false, synced: false, credentials: list }
+  const error = new Error('远端 DSH 尚未配置 DEEPSEEK_API_KEY')
+  error.code = 'REMOTE_DSH_CREDENTIAL_REQUIRED'
+  error.credentials = {
+    records: list.records || [],
+    refs: list.refs || [],
+  }
+  throw error
+}
+
+async function remotePackBytes(body = {}) {
+  const token = String(body.token || '')
+  const found = token ? packInspectCache.get(token) : null
+  if (found?.file && existsSync(found.file) && statSync(found.file).isFile()) return await readFile(found.file)
+  if (body.base64) return Buffer.from(String(body.base64), 'base64')
+  const source = body.market
+    ? { kind: 'market', id: String(body.market.id || ''), url: String(body.market.downloadUrl || ''), sha256: String(body.market.sha256 || ''), size: Number(body.market.size) || 0, name: String(body.market.name || '') }
+    : String(body.source || '')
+  const opened = await openPackSource(source)
+  if (opened.file && existsSync(opened.file) && statSync(opened.file).isFile()) return await readFile(opened.file)
+  throw new Error('远程安装只支持 .dspack/zip 文件、链接或市场包；本地目录包请先导出后再安装')
+}
+
+async function startRemoteLaunch(id, { takeover = false, allowMissingCredential = false } = {}) {
+  const entry = await remoteLaunchEntry(id)
+  const options = await remoteLaunchOptions()
+  const credentials = await ensureRemoteDshCredentials(entry, options, { allowMissing: allowMissingCredential === true })
+  const version = entry.version === 'auto' ? entry.usedVersion || '' : entry.version
+  const result = await remoteStartEntry(entry.remote, {
+    ...entry,
+    // 首次保存的远程项不必先查远端版本；remoteStartEntry 会在远端解析并安装。
+    version,
+  }, { ...options, takeover })
+  if (result?.version && result.version !== 'external') await recordLaunchUse(entry.id, result.version)
+  rememberRemoteRuntime(entry, result?.state || result)
+  // 不能用“主机:端口”补 URL：DSH Web 需要 token 首跳换 cookie，无 token 地址只会显示 401。
+  const url = result.url || ''
+  await emitState()
+  return {
+    remote: { host: entry.remote.host, user: entry.remote.user },
+    version: result.version || '',
+    profile: entry.profile,
+    url,
+    remoteUrl: url,
+    pid: result.pid,
+    state: result,
+    probe: result.probe || result.state?.probe || null,
+    credentials,
+    warning: result.warning || '',
+  }
+}
+
+async function trayAction(body, startup = {}) {
+  const row = trayLaunches().find((item) => item.id === body.id)
+  if (!row) throw new Error('启动项已不存在，请重新打开托盘菜单')
+  const action = body.action
+  if (!['start', 'open', 'stop', 'restart'].includes(action)) throw new Error('未知托盘操作')
+  // 菜单打开后入口可能被编辑，旧菜单不能悄悄操作另一个版本或数据目录。
+  if ((body.targetId || '') !== (row.target?.id || '') || (body.instanceId && body.instanceId !== row.key)) throw new Error('启动项状态已变化，请重新打开托盘菜单')
+  if (row.preset?.remote) {
+    if (action === 'open') {
+      const state = remoteRuntimeStates.get(row.id)
+      if (!state?.alive || !state?.url) throw new Error('远端 DSH 尚未启动完成')
+      if (state.probe?.ok === false) throw new Error(`远端 DSH 服务检测失败：${state.probe.reason || state.probe.status || '未知原因'}`)
+      openExternal(state.url, 'internal')
+      return { ok: true }
+    }
+    trayActions.set(row.key, { id: row.id, name: row.name, home: row.home, version: row.version, profile: row.profile, status: action === 'stop' ? 'stopping' : 'starting' })
+    try {
+      if (action === 'stop' || action === 'restart') {
+        const stopped = await remoteStopEntry(row.preset.remote, row.id, await remoteLaunchOptions())
+        if (stopped?.state) rememberRemoteRuntime(row.preset, stopped.state)
+      }
+      if (action !== 'stop') return await startRemoteLaunch(row.id)
+      return { ok: true }
+    } finally {
+      trayActions.delete(row.key)
+    }
+  }
+  if (row.busy || row.status === 'stopping') throw new Error('该启动项正在操作，请稍后再试')
+  if (action === 'open') {
+    if (row.proc?.status !== 'running' || !row.proc.url) throw new Error('该启动项尚未启动完成')
+    openLocalUrl(row.proc.url)
+    return { ok: true }
+  }
+  if (action === 'start' && row.proc) throw new Error('该启动项已经在运行或启动中')
+  if (['stop', 'restart'].includes(action) && !row.proc) throw new Error('该启动项没有运行实例')
+  if (action !== 'stop' && !row.installed) throw new Error('请先在启动器中安装此版本')
+  trayActions.set(row.key, { id: row.id, name: row.name, home: row.home, version: row.version, profile: row.profile, status: action === 'stop' ? 'stopping' : 'starting' })
+  try {
+    return await launchScope.run({ ...startup, home: row.home, launchId: row.preset?.id }, async () => {
+      if (action === 'stop' || action === 'restart') await stop(row.version, row.profile, row.home)
+      if (action !== 'stop') {
+        if (row.preset) {
+          await setInstancePort(row.version, row.profile, row.preset.port)
+          await recordLaunchUse(row.preset.id, row.version)
+        }
+        return start(row.version, row.profile)
+      }
+      return { ok: true }
+    })
+  } finally {
+    trayActions.delete(row.key)
+  }
+}
+
+let startupGeneration = 0
+
+function assertStartupActive() {
+  const generation = launchScope.getStore()?.startupGeneration
+  if (generation !== undefined && generation !== startupGeneration) {
+    const error = new Error('启动器已退出，取消自动启动')
+    error.code = 'STARTUP_CANCELLED'
+    throw error
+  }
+}
+
+/** 只启动明确勾选且已安装的入口；不等内核就绪，管理页与原生窗口可以继续加载。 */
+async function launchStartupPresets(presets) {
+  if (!safeLaunchPresets(presets).some((entry) => entry.autoLaunch)) return
+  const generation = startupGeneration
+  await Promise.all(trayLaunches().filter((row) => row.preset?.autoLaunch).map(async (row) => {
+    if (row.proc || row.busy) return
+    if (!row.installed) {
+      pushLog(`自动启动「${row.name}」已跳过：请先安装${row.version ? ` ${row.version}` : '内核'}`)
+      return
+    }
+    try {
+      pushLog(`自动启动「${row.name}」`)
+      await trayAction({ id: row.id, action: 'start', instanceId: row.key }, { startupGeneration: generation })
+    } catch (error) {
+      if (error?.code !== 'STARTUP_CANCELLED') pushLog(`自动启动「${row.name}」失败：${error instanceof Error ? error.message : error}`)
+    }
+  }))
+}
+
+// 运行时也能编辑快捷入口；保存与启动历史共用一条写队列，防止并发读改写覆盖彼此。
+let launchPresetWrites = Promise.resolve()
+function withLaunchPresetWrite(run) {
+  const result = launchPresetWrites.then(run)
+  launchPresetWrites = result.catch(() => {})
+  return result
+}
+function saveLaunchPreset(body) { return withLaunchPresetWrite(() => saveLaunchPresetNow(body)) }
+function removeLaunchPreset(id) { return withLaunchPresetWrite(() => removeLaunchPresetNow(id)) }
+function reorderLaunchPresets(ids) {
+  return withLaunchPresetWrite(async () => {
+    const stored = await saveSettings((current) => {
+      const entries = safeLaunchPresets(current.launchPresets)
+      const byId = new Map(entries.map((entry) => [entry.id, entry]))
+      // 只接受当前列表的排列，过期页面不能把另一窗口刚添加的启动项覆盖掉。
+      if (!Array.isArray(ids) || ids.length !== entries.length || new Set(ids).size !== ids.length || ids.some((id) => !byId.has(id))) throw new Error('启动项列表已变化，请刷新后重新排序')
+      return { launchPresets: ids.map((id) => byId.get(id)) }
+    })
+    await emitState()
+    return { launchPresets: safeLaunchPresets(stored.launchPresets) }
+  })
+}
+function recordLaunchUse(id, version) { return withLaunchPresetWrite(() => recordLaunchUseNow(id, version)) }
+
+async function saveRemoteLaunchPreset(body) {
+  const name = String(body.name ?? '').trim()
+  if (!name || name.length > 32) throw new Error('启动项名称请填 1-32 个字符')
+  const profile = safeProfile(body.profile)
+  const version = safeVersion(body.version)
+  const remoteDshHome = safeRemoteDshHome(body.dshHome)
+  const portText = String(body.port ?? '').trim()
+  const port = portText && portText !== '0' ? safePort(portText) : 0
+  const updateChannel = body.updateChannel === undefined ? DEFAULT_UPDATE_CHANNEL : safeUpdateChannel(body.updateChannel)
+
+  const stored = await loadSettings()
+  const presets = safeLaunchPresets(stored.launchPresets)
+  const id = body.id ? String(body.id) : randomBytes(8).toString('hex')
+  const index = presets.findIndex((item) => item.id === id)
+  if (body.id && index < 0) throw new Error('这个启动项已不存在，请刷新后重试')
+  if (index < 0 && presets.length >= 20) throw new Error('最多保存 20 个启动项')
+  const existing = index >= 0 ? presets[index] : null
+  const target = body.remote === undefined ? existing?.remote : safeRemoteTarget(body.remote)
+  if (!target) throw new Error('远程启动项缺少 SSH 目标，请重新填写主机和用户')
+  // 保存时就把“.ssh 目录 / .pub 公钥”归一成真正私钥；运行期再做一次是为了兼容旧 settings。
+  const identityFile = remoteIdentityFile(target)
+  const normalizedTarget = { ...target, ...(identityFile ? { identityFile } : {}) }
+
+  const duplicate = presets.some((item) => item.id !== id
+    && item.remote?.host === target.host && item.remote?.user === target.user
+    && (item.dshHome || '') === remoteDshHome && item.profile === profile)
+  if (duplicate) throw new Error('这个远端目录中的 Profile 已有启动项，编辑现有的即可')
+  if (port && presets.some((item) => item.id !== id && item.port === port
+    && item.remote?.host === target.host && item.remote?.user === target.user)) throw new Error(`远端主机 ${target.host} 上端口 ${port} 已被其他启动项使用`)
+
+  // 新建 custom Profile 时目录只落在远端 DSH_HOME；本地不会创建同名 Profile，
+  // 也不会把远端路径交给 Windows path.resolve()。
+  if (body.ensureProfile === true && !['web', 'headless', 'acp', 'sdk', 'sdk-minimal'].includes(profile.toLowerCase())) {
+    await remoteProfileCreate(target, remoteDshHome, profile, await remoteLaunchOptions())
+  }
+  const entry = {
+    id,
+    name,
+    version,
+    profile,
+    port,
+    dshHome: remoteDshHome,
+    remote: normalizedTarget,
+    ...(updateChannel !== DEFAULT_UPDATE_CHANNEL ? { updateChannel } : {}),
+    ...(existing?.usedVersion ? { usedVersion: existing.usedVersion } : {}),
+    ...(existing?.prevVersion ? { prevVersion: existing.prevVersion } : {}),
+    ...(safeLaunchIcon(body.icon) !== 'terminal' ? { icon: safeLaunchIcon(body.icon) } : {}),
+  }
+  if (index >= 0) presets[index] = entry
+  else presets.push(entry)
+  await saveSettings({ launchPresets: presets })
+  await emitState()
+  return { ok: true, entry }
+}
+
+async function saveLaunchPresetNow(body) {
+  const name = String(body.name ?? '').trim()
+  if (!name || name.length > 32) throw new Error('启动项名称请填 1-32 个字符')
+  const version = safeVersion(body.version)
+  const profile = safeProfile(body.profile)
+  const remote = body.remote === undefined ? undefined : safeRemoteTarget(body.remote)
+  if (remote) return saveRemoteLaunchPreset({ ...body, remote })
+  if (installing || packInstalling) throw new Error('正在安装，稍后再编辑启动项')
+  // 数据目录只用 dsh 用户目录；旧的「项目目录」字段不再读取，历史启动项按已保存的 dshHome 走。
+  const dshHome = safeDshHome(body.dshHome)
+  const home = dshHome || defaultHome()
+  if (dshHome && dshHome !== defaultHome()) await ensureWritableDir(dshHome)
+  // Profile 不存在时按名字建，建在 home 对应的目录作用域里（和 /api/profiles/create 的
+  // x-dsh-home 同一套语义），页面不用先建 Profile 再存启动项——两步之间的失败会留下半截环境。
+  // 指定了复制来源就先复制：同样一步完成目录、Profile、依赖和启动项，用户不必自己搬配置。
+  // 目标里已经有同名 Profile 时不动它 —— 那份是用户后来自己改的，重试保存也不该被覆盖。
+  const missing = () => !listProfiles(join(home, 'profiles')).includes(profile)
+  const copyFrom = body.copyFrom && typeof body.copyFrom === 'object' ? body.copyFrom : null
+  if (copyFrom && missing()) {
+    const fromProfile = safeProfile(copyFrom.profile)
+    // 空的来源目录 = 当前（默认）用户目录，跟页面上的「沿用全局目录」一个意思。
+    const fromHome = safeDshHome(copyFrom.home) || ''
+    await launchScope.run({ home }, () => createProfile(profile, fromProfile, fromHome))
+  } else if (body.ensureProfile === true && missing()) {
+    await launchScope.run({ home }, () => createProfile(profile))
+  }
+  if (missing()) throw new Error(`profile ${profile} 不存在`)
+  const portText = String(body.port ?? '').trim()
+  const port = portText && portText !== '0' ? safePort(portText) : 0
+  // 没带这个字段就沿用原来的通道（同 autoLaunch）：只改别的字段的调用方，比如「更新到新版」时
+  // 把版本钉子挪过去，不该顺手把通道重置成正式版。坏值在动设置之前就报错。
+  const requestedChannel = body.updateChannel === undefined ? undefined : safeUpdateChannel(body.updateChannel)
+  const stored = await loadSettings()
+  if (installing || packInstalling) throw new Error('正在安装，稍后再编辑启动项')
+  const presets = safeLaunchPresets(stored.launchPresets)
+  const id = body.id ? String(body.id) : randomBytes(8).toString('hex')
+  const index = presets.findIndex((item) => item.id === id)
+  if (body.id && index < 0) throw new Error('这个启动项已不存在，请刷新后重试')
+  if (index < 0 && presets.length >= 20) throw new Error('最多保存 20 个启动项')
+  // 查重要比「解析后」的版本：auto 要落到它实际会用的版本再比，不然 auto 项和明写
+  // 同一个版本的项能摆出两张一模一样的卡（两张还同时显示运行中——其实是同一个实例）。
+  // auto 落到哪个版本取决于版本类型，所以类型也要按这次保存后的值算，改类型也算改了解析结果。
+  const existingEntry = index >= 0 ? presets[index] : null
+  const updateChannel = requestedChannel ?? safeUpdateChannel(existingEntry?.updateChannel)
+  const config = await loadConfig()
+  const effectiveVersion = resolvePresetVersion({ version, profile, updateChannel }, home, config)
+  const tripleChanged = !existingEntry || existingEntry.version !== version || existingEntry.profile !== profile
+    || (existingEntry.dshHome || defaultHome()) !== home
+    || (version === 'auto' && safeUpdateChannel(existingEntry.updateChannel) !== updateChannel)
+  if (tripleChanged && effectiveVersion && presets.some((item) => {
+    if (item.id === id) return false
+    if (item.profile !== profile || (item.dshHome || defaultHome()) !== home) return false
+    return resolvePresetVersion(item, home, config) === effectiveVersion
+  })) {
+    throw new Error('这个目录中的版本与 profile 已有启动项，编辑现有的即可')
+  }
+  if (port) {
+    if (!launchScope.run({ home }, () => bootsWebApp(profile))) throw new Error(`profile ${profile} 不起 web 应用，端口对它没用`)
+    if (port === PORT || port === safePort(stored.port)) throw new Error(`端口 ${port} 是管理页自己在用的，换一个`)
+    if (presets.some((item) => item.id !== id && item.port === port)) throw new Error(`端口 ${port} 已被其他启动项使用，换一个`)
+  }
+  // 编辑只保存启动项，不提前改正在使用的实例参数；端口在点击启动时再应用。
+  const icon = safeLaunchIcon(body.icon)
+  const entry = { id, name, version, profile, port,
+    ...((body.autoLaunch === undefined ? existingEntry?.autoLaunch : body.autoLaunch === true) ? { autoLaunch: true } : {}),
+    ...(updateChannel !== DEFAULT_UPDATE_CHANNEL ? { updateChannel } : {}),
+    // 用过的版本记录跟着启动项走，编辑参数不该抹掉回退历史。
+    ...(existingEntry?.usedVersion ? { usedVersion: existingEntry.usedVersion } : {}),
+    ...(existingEntry?.prevVersion ? { prevVersion: existingEntry.prevVersion } : {}),
+    ...(dshHome ? { dshHome } : {}), ...(icon !== 'terminal' ? { icon } : {}) }
+  if (index >= 0) presets[index] = entry
+  else presets.push(entry)
+  await saveSettings({ launchPresets: presets })
+  await emitState()
+  return { ok: true, entry }
+}
+
+async function removeLaunchPresetNow(id) {
+  if (installing || packInstalling) throw new Error('正在安装，稍后再编辑启动项')
+  if (id === DEFAULT_LAUNCH_ID) throw new Error('默认启动项不能删除，可以编辑它')
+  const stored = await loadSettings()
+  if (installing || packInstalling) throw new Error('正在安装，稍后再编辑启动项')
+  const presets = safeLaunchPresets(stored.launchPresets)
+  const entry = presets.find((item) => item.id === id)
+  const next = presets.filter((item) => item.id !== id)
+  if (!entry) throw new Error('这个启动项已不存在，请刷新后重试')
+  // 启动项是端口钉子的唯一入口：它删掉、又没有别的启动项用同一个版本@profile 时，
+  // 钉子一起清掉，否则端口会被一个已经不存在的启动项永久占住（#90）。
+  const home = entry.dshHome || defaultHome()
+  const profile = entry.profile || 'web'
+  const keys = new Set([entry.version !== 'auto' ? entry.version : '', entry.usedVersion, entry.prevVersion]
+    .filter(Boolean).map((version) => `${version}@${profile}`))
+  for (const other of next) {
+    if (!fileManager.samePath(other.dshHome || defaultHome(), home)) continue
+    for (const version of [other.version !== 'auto' ? other.version : '', other.usedVersion, other.prevVersion]) {
+      if (version) keys.delete(`${version}@${other.profile || 'web'}`)
+    }
+  }
+  const patch = { launchPresets: next }
+  if (keys.size) {
+    if (fileManager.samePath(home, defaultHome())) {
+      const ports = { ...safeInstancePorts(stored.instancePorts) }
+      for (const key of keys) delete ports[key]
+      patch.instancePorts = ports
+    } else {
+      const environments = safeEnvironmentPorts(stored.environmentPorts)
+      const dir = Object.keys(environments).find((item) => fileManager.samePath(item, home))
+      if (dir) {
+        const ports = { ...environments[dir] }
+        for (const key of keys) delete ports[key]
+        patch.environmentPorts = { ...environments, [dir]: ports }
+      }
+    }
+  }
+  const saved = await saveSettings(patch)
+  INSTANCE_PORTS = safeInstancePorts(saved.instancePorts)
+  ENVIRONMENT_PORTS = liveEnvironmentPorts(saved)
+  dropLaunchLog(id)
+  await emitState()
+  return { ok: true }
+}
+
+/**
+ * 记下启动项这次实际启动的版本：当前用让位成上一次用，两个版本清理时都按启动项保留。
+ * 记不上不拦启动——这只是回退用的历史，不是启动的依赖。
+ */
+async function recordLaunchUseNow(launchId, version) {
+  if (!launchId) return
+  try {
+    const ver = safeVersion(version)
+    const stored = await loadSettings()
+    const presets = safeLaunchPresets(stored.launchPresets)
+    const entry = presets.find((item) => item.id === launchId)
+    if (!entry || entry.usedVersion === ver) return
+    if (entry.usedVersion) entry.prevVersion = entry.usedVersion
+    entry.usedVersion = ver
+    await saveSettings({ launchPresets: presets })
+  } catch (error) {
+    pushLog(`记录启动项版本失败：${error instanceof Error ? error.message : error}`)
+  }
+}
+
+/** 去掉一个键的副本（不原地改，省得把 map 的引用语义搞混）。 */
+function mapWithout(map, key) {
+  const out = { ...map }
+  delete out[key]
+  return out
+}
+
+/**
+ * 版本卸掉或被自动清理之后，它那几条固定端口就没有意义了：留着既占着端口号，以后
+ * 想钉同一个端口还会被「已经钉给 0.1.6@web 了」挡住——而那个版本早就不在了。
+ */
+async function dropInstancePorts(version) {
+  const prefix = `${version}@`
+  const kept = Object.fromEntries(Object.entries(INSTANCE_PORTS).filter(([key]) => !key.startsWith(prefix)))
+  const environments = Object.fromEntries(Object.entries(ENVIRONMENT_PORTS).map(([home, ports]) =>
+    [home, Object.fromEntries(Object.entries(ports).filter(([key]) => !key.startsWith(prefix)))]))
+  if (Object.keys(kept).length === Object.keys(INSTANCE_PORTS).length
+    && Object.entries(environments).every(([home, ports]) => Object.keys(ports).length === Object.keys(ENVIRONMENT_PORTS[home]).length)) return
+  const saved = await saveSettings({ instancePorts: kept, environmentPorts: environments })
+  INSTANCE_PORTS = safeInstancePorts(saved.instancePorts)
+  ENVIRONMENT_PORTS = liveEnvironmentPorts(saved)
+}
+
+async function saveManagerSettings(body) {
+  if (diagnosticRepairs.busy.size) {
+    throw new Error('正在确认修复或回退，结束后再修改启动设置。')
+  }
+  let systemPathResult
+  // 系统 node 是路径/命令，保存前先确认真的找得到、而且跑得起来 —— 否则要等下次启动 dsh 才发现选了个空
+  if ('systemNodePath' in body) {
+    const path = safeSystemNodePath(body.systemNodePath)
+    if (path) {
+      const found = findSystemNode(path)
+      if (!found) throw new Error(`找不到这个 node：${path}`)
+      if (!nodeVersionOf(found)) throw new Error(`这个文件不是能用的 node：${found}`)
+    }
+  }
+  if (body.dataDir) {
+    const dir = safeDataDir(body.dataDir)
+    if (dir !== DATA && (instances.size || startingProfiles.size)) throw new Error('请先停止再改版本目录')
+    if (installing) throw new Error('正在安装，稍后再改版本目录')
+    if (dir !== DATA) revokeIdleInstanceLinks()
+    await applyDataDir(dir)
+  }
+  const stored = await saveSettings({
+    dataDir: DATA,
+    ...('port' in body ? { port: safePort(body.port) } : {}),
+    ...('profile' in body ? { profile: safeProfile(body.profile) } : {}),
+    ...('args' in body ? { args: safeArgs(body.args) } : {}),
+    ...('downloadSource' in body ? { downloadSource: safeDownloadSource(body.downloadSource) }
+      : 'updateSource' in body ? { downloadSource: safeUpdateSource(body.updateSource) === 'direct' ? 'official' : 'mirror' } : {}),
+    ...('proxyMode' in body ? { proxyMode: safeProxyMode(body.proxyMode) } : {}),
+    ...('proxyUrl' in body ? { proxyUrl: safeProxyUrl(body.proxyUrl) } : {}),
+    ...('openMode' in body ? { openMode: safeOpenMode(body.openMode) } : {}),
+    ...('systemPath' in body ? { systemPath: body.systemPath === true } : {}),
+    ...('nodeRuntime' in body ? { nodeRuntime: safeNodeRuntime(body.nodeRuntime) } : {}),
+    ...('systemNodePath' in body ? { systemNodePath: safeSystemNodePath(body.systemNodePath) } : {}),
+    ...('dshHome' in body ? { dshHome: safeDshHome(body.dshHome) } : {}),
+    ...('webBind' in body ? { webBind: safeWebBind(body.webBind) } : {}),
+    ...('remoteWebBind' in body ? { remoteWebBind: safeRemoteWebBind(body.remoteWebBind) } : {}),
+    ...('lang' in body ? { lang: safeLang(body.lang) } : {}),
+    ...('theme' in body ? { theme: safeTheme(body.theme) } : {}),
+    ...('launchIsolation' in body ? { launchIsolation: safeLaunchIsolation(body.launchIsolation) } : {}),
+    ...('panelTransparency' in body ? { panelTransparency: safePanelTransparency(body.panelTransparency) } : {}),
+    ...('reduceMotion' in body ? { reduceMotion: body.reduceMotion === true } : {}),
+    ...('hideBackground' in body ? { hideBackground: body.hideBackground === true } : {}),
+    ...('hideBigFish' in body ? { hideBigFish: body.hideBigFish === true } : {}),
+    ...('hardwareAcceleration' in body ? { hardwareAcceleration: body.hardwareAcceleration !== false } : {}),
+    ...('autoUpdate' in body ? { autoUpdate: body.autoUpdate === true } : {}),
+    ...('taskNotifications' in body ? { taskNotifications: body.taskNotifications !== false } : {}),
+    ...('notificationSound' in body ? { notificationSound: body.notificationSound !== false } : {}),
+    ...('closeToTray' in body ? { closeToTray: body.closeToTray !== false } : {}),
+    ...('keepAwake' in body ? { keepAwake: body.keepAwake === true } : {}),
+    ...('browserIgnoreCertificate' in body ? { browserIgnoreCertificate: body.browserIgnoreCertificate === true } : {}),
+    ...('autoStart' in body ? { autoStart: Boolean(body.autoStart) } : {}),
+    ...('pluginMarketSources' in body ? { pluginMarketSources: safePluginMarketSources(body.pluginMarketSources) } : {}),
+    ...('autoDisablePlugins' in body ? { autoDisablePlugins: body.autoDisablePlugins !== false } : {}),
+    ...('autoCleanVersions' in body ? { autoCleanVersions: body.autoCleanVersions !== false } : {}),
+    ...('keepVersions' in body ? { keepVersions: safeKeepVersions(body.keepVersions) } : {}),
+  })
+  if ('autoStart' in body) {
+    try {
+      await fileManager.setAutoStart(stored.autoStart)
+    } catch (error) {
+      pushLog(`开机自启未写入: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+  // 切换下载源后清掉更新检查的缓存，让新源立即生效（下载那侧每次现读，不用清）
+  if ('downloadSource' in body || 'updateSource' in body) {
+    remoteCache = { at: 0, data: null }
+    pluginUpdateCache.at = 0
+    UPDATE_SOURCE = updateSourceForDownload(stored.downloadSource)
+    selfCache = { at: 0, data: null }
+    pushLog(`下载源改为 ${UPDATE_SOURCE === 'mirror' ? '镜像源' : '官方源'}`)
+  }
+  if ('proxyMode' in body || 'proxyUrl' in body) {
+    // 探测结果有缓存，改了设置要立刻重新探一次；请求那侧每次现读设置，不用重启
+    resetProxyCache()
+    const inUse = resolveProxy(stored)
+    const why = inUse.note === 'socks' ? `（系统里只有 socks 代理 ${inUse.detail}）`
+      : inUse.note === 'bad-url' ? '（地址认不出来）'
+        : ''
+    pushLog(inUse.url
+      ? `网络代理：${inUse.url}（${inUse.mode === 'manual' ? '手动填写' : '跟随系统'}）`
+      : `网络代理：${inUse.mode === 'off' ? '不走代理，全部直连' : `没找到可用的代理，按直连走${why}`}`)
+  }
+  if ('openMode' in body) {
+    OPEN_MODE = safeOpenMode(stored.openMode)
+    pushLog(OPEN_MODE === 'app'
+      ? '打开方式：浏览器独立窗口（找不到 Chrome/Edge 会退回标签页）'
+      : OPEN_MODE === 'window'
+        ? `打开方式：独立桌面窗口（${shellWindowHost() ? '由启动器打开，不经过浏览器' : '当前没有原生外壳，会退回浏览器标签页'}）`
+        : OPEN_MODE === 'internal'
+          ? `打开方式：DSH-X 内部标签页（${internalTabsHost() ? '在启动器内切换' : '当前外壳不支持，会退回浏览器标签页'}）`
+        : '打开方式：系统浏览器标签页')
+  }
+  if ('systemPath' in body) {
+    SYSTEM_PATH = stored.systemPath === true
+    const result = applySystemPath(SYSTEM_PATH)
+    systemPathResult = result
+    if (!result.ok) pushLog(`系统 PATH 未改：${result.message}`)
+    else if (SYSTEM_PATH) {
+      // 多实例没有唯一的「当前版本」：跟随最近运行的实例，尚未启动时沿用启动默认的安装列表顺序。
+      const version = primaryInstance()?.version || listedVersions(await loadConfig())[0]
+      if (version) writeDshShims(version, { dir: result.dir })
+    }
+  }
+  if ('dshHome' in body) {
+    const next = safeDshHome(stored.dshHome)
+    const home = next || defaultDshHome()
+    // 目录不存在就建出来，写不了直接报错——别等到下次启动 dsh 才发现
+    if (next) await ensureWritableDir(home)
+    if (next !== DSH_HOME_DIR) {
+      DSH_HOME_DIR = next
+      pushLog(`dsh 用户目录改为 ${home}${next ? '' : '（默认位置）'}；重启 dsh 后生效`)
+    }
+  }
+  if ('nodeRuntime' in body || 'systemNodePath' in body) {
+    // 刚改过路径：版本缓存作废，页面下一次读设置就能看到新值
+    nodeVersionCache.clear()
+    const view = nodeRuntimeView(stored)
+    pushLog(view.configured === 'system'
+      ? `跑 dsh 的 node 改为系统 Node（${view.system?.path || '没找到'}）；重启启动器后生效`
+      : '跑 dsh 的 node 改回启动器自带的 Node；重启启动器后生效')
+  }
+  if ('autoCleanVersions' in body) {
+    pushLog(stored.autoCleanVersions
+      ? '装新版本后自动清理旧版本'
+      : '不再自动清理旧版本（已装版本全部保留）')
+  }
+  if ('taskNotifications' in body) {
+    // 任务通知只管外壳自己的提醒（实例启动失败 / 意外退出）；插件自己的通知由 dsh
+    // 插件页的开关控制，不再跟着这个键停下。
+    pushLog(stored.taskNotifications !== false
+      ? '任务通知已开启：实例启动失败 / 意外退出时发桌面通知'
+      : '任务通知已关闭：实例启动失败 / 意外退出时不再发桌面通知')
+  }
+  if ('hardwareAcceleration' in body) {
+    pushLog(stored.hardwareAcceleration ? 'Chrome 硬件加速已开启，重启启动器后生效' : 'Chrome 硬件加速已关闭，重启启动器后生效')
+  }
+  if ('keepAwake' in body) pushLog(stored.keepAwake ? '已阻止系统空闲休眠' : '不再阻止系统空闲休眠')
+  if ('browserIgnoreCertificate' in body) {
+    pushLog(stored.browserIgnoreCertificate
+      ? '内置浏览器不再校验 HTTPS 证书（只影响内置浏览器，重启启动器后生效）'
+      : '内置浏览器恢复 HTTPS 证书校验（重启启动器后生效）')
+  }
+  // profile 立即生效：插件页、启动参数、npmrc 都读这个变量（已经在跑的 dsh 不受影响）
+  EXTRA_ARGS = composeExtraArgs(stored.args)
+  WEB_BIND = safeWebBind(stored.webBind)
+  REMOTE_WEB_BIND = safeRemoteWebBind(stored.remoteWebBind || DEFAULT_REMOTE_WEB_BIND)
+  INSTANCE_PORTS = safeInstancePorts(stored.instancePorts)
+  ENVIRONMENT_PORTS = liveEnvironmentPorts(stored)
+  if (safeLang(stored.lang)) LANG = safeLang(stored.lang)
+  THEME = safeTheme(stored.theme)
+  PANEL_TRANSPARENCY = safePanelTransparency(stored.panelTransparency)
+  REDUCE_MOTION = stored.reduceMotion === true
+  HIDE_BACKGROUND = stored.hideBackground === true
+  HIDE_BIG_FISH = stored.hideBigFish === true
+  if (stored.profile && stored.profile !== PROFILE_NAME) {
+    pushLog(`启动 profile 改为 ${stored.profile}`)
+    PROFILE_NAME = stored.profile
+  }
+  await emitState()
+  return { ...await publicSettings(), ...(systemPathResult ? { systemPathResult } : {}) }
+}
+
+async function emitState() {
+  const snap = await snapshot()
+  emit('state', snap)
+}
+
+/**
+ * dsh 子进程与 AI 修复命令共用的环境变量（AI 靠这些变量拼出正确的 dsh 命令）。
+ * @param options.pnpmDir 这次要让哪个 pnpm 目录排最前（插件操作按 profile 的 store 挑，见 preferredPnpmDir）
+ */
+export function dshEnv(version, options = {}) {
+  const home = homeDir()
+  const workerCompat = existsSync(WORKER_COMPAT)
+  const env = {
+    ...process.env,
+    // 打包后 RUNTIME_NODE 是 Electron 本体：子进程带这个变量才会按 node 跑（见 platform.js）
+    ...RUNTIME_NODE_ENV,
+    DSH_HOME: home,
+    DSH_NODE: RUNTIME_NODE,
+    DSH_BIN: binPath(version),
+    DSH_VERSION: version,
+    DSH_PROFILE: PROFILE_NAME,
+    // 只给官方市场 schema 提供缺省值；用户保存过的 indexes（包括空数组）始终优先。
+    DSH_X_PLUGIN_MARKET_SOURCES: JSON.stringify(safePluginMarketSources(loadSettingsSync().pluginMarketSources)),
+    // 插件桌面 API 的发现信息：管理页端口每次启动可能顺延，插件不许硬编码 3780。
+    // DSH_X_DESKTOP 只在真外壳接上 host.desktop 时给（浏览器模式 / 旧外壳没有），
+    // 插件据此静默降级，不必先发一次注定 503 的请求。
+    DSH_X_MANAGER_URL: `http://127.0.0.1:${PORT}`,
+    ...(host.desktop ? { DSH_X_DESKTOP: '1' } : {}),
+    // 只有「必须被 dsh 起的 worker 线程继承」的东西留在这里：worker 的 execArgv 是空的，
+    // 命令行参数传不进去，只能靠 NODE_OPTIONS（路径写法见 nodeOptionsPath）。
+    // dsh 自己要的那几个开关（--use-system-ca、--max-http-header-size、--import 钩子）走命令行，
+    // 见 spawnDsh：NODE_OPTIONS 会被**所有**子进程继承，agent 在 shell 里跑的 node 万一是老版本，
+    // 撞上 --use-system-ca 这种新开关会直接 bad option 退出。
+    // 同理**不能靠 NODE_PATH 传目录**：非纯 Node 宿主（Electron 主进程）不消费 NODE_PATH，
+    // NODE_OPTIONS 里的裸文件名会直接 Cannot find module，把人家整个进程顶掉。
+    NODE_OPTIONS: [
+      process.env.NODE_OPTIONS,
+      workerCompat ? `--require ${nodeOptionsPath(WORKER_COMPAT)}` : '',
+    ].filter(Boolean).join(' '),
+    npm_config_ignore_workspace_root_check: 'true',
+    // 下载源也传给 dsh 子进程：插件安装/升级是 dsh 自己跑 pnpm，不传的话它会按 pnpm 自己的
+    // 配置解析（多数机器上就是 npm 官方默认源），于是「检查更新」看的是设置里的源、真正装包
+    // 却走另一个源。传下去之后全链路一致：选了哪个源，查版本、下 dsh、装插件都走它。
+    npm_config_registry: currentRegistry(),
+    // 代理同理传下去：dsh 自己跑 pnpm 装插件、agent 在 shell 里跑 git/curl，认的都是这几个
+    // 环境变量（NO_PROXY 里带着回环，本机服务不受影响）。设置成「不走代理」时这里是空的。
+    ...proxyEnv(),
+    // 末尾追加两个目录：先是启动器写的 dsh shim（node 写死成启动器自己的），再是版本自己的
+    // .bin（里面有 cordis 之类的入口）。追加不插队 —— 用户自己的 dsh 仍然优先。
+    PATH: withVersionBin(withBundledRuntime(process.env.PATH || '', options.pnpmDir), join(DATA, '.bin'), versionBinDir(version)),
+  }
+  return env
+}
+
+/** 某个 PATH 条目里是否已经能直接调到这个命令（Windows 上按 PATHEXT 补后缀猜）。 */
+function hasCommand(dir, name) {
+  return fileManager.hasCommand(dir, name)
+}
+
+/**
+ * 自带运行时的 PATH 排序（纯函数；目录是否真的存在由调用方判断）。
+ *
+ * 自带目录默认排最前，但系统 PATH 里**已经有 pnpm** 时例外：store 主版本跟着 pnpm
+ * 主版本走（8→v3、10→v10、11/12→v11），而 profile 的 `node_modules/.modules.yaml`
+ * 记着当初建它的那次用的是哪个 store。拿错主版本的 pnpm 去动这个 profile，pnpm 会
+ * 以 ERR_PNPM_UNEXPECTED_STORE 拒绝一切 add/remove，插件页的卸载、更新全红（#12）。
+ * 谁建的 profile 就用谁的 pnpm 最省事 —— 所以插件操作会先按 store 挑一次，把挑中的目录
+ * 经 preferredPnpm 传进来（见 pickPnpmDir）；挑不出来才回到「系统的优先」。node/npm 仍用
+ * 自带的（插件里的原生模块指望它构建），自带目录整体紧随其后。
+ *
+ * @param parts 原始 PATH 片段
+ * @param dir 自带运行时目录
+ * @param preferredPnpm 指定的 pnpm 目录（可以就是 dir）；空 = 按「系统优先」排
+ */
+export function orderRuntimePaths(parts, dir, preferredPnpm = '') {
+  const rest = parts.filter((item) => item !== dir)
+  // 用户自己的工具链优先：有 pnpm 的目录排最前（#12 的 store 错配），其次是带 node 的目录。
+  // 自带运行时只是兜底 —— agent 在 shell 里跑的 node 应该是用户自己那个，而不是我们的 22.19。
+  const pnpmDir = preferredPnpm && hasCommand(preferredPnpm, 'pnpm') ? preferredPnpm : rest.find((item) => hasCommand(item, 'pnpm'))
+  const nodeDir = rest.find((item) => hasCommand(item, 'node'))
+  const ordered = [pnpmDir, nodeDir, dir, ...rest].filter(Boolean)
+  return ordered.filter((item, index) => ordered.indexOf(item) === index)
+}
+
+/**
+ * profile 的 `.modules.yaml` 记着建它那次用的 store 版本（`v3` / `v10` / `v11`…）；没有就是空串。
+ * 两种写法都要认：pnpm 8 写的是无引号 yaml（`storeDir: C:\…\store\v3`），
+ * pnpm 10/11 写的是带引号的 JSON（`"storeDir": "C:\\…\\store\\v11"`）。
+ */
+export function profileStoreVersion(dir) {
+  try {
+    const text = readFileSync(join(dir, 'node_modules', '.modules.yaml'), 'utf8')
+    const found = /"?storeDir"?\s*:\s*("?)([^"\r\n]+)\1/.exec(text)
+    return found ? basename(found[2].replace(/\\/g, '/')) : ''
+  } catch {
+    return ''
+  }
+}
+
+const pnpmStoreCache = new Map()
+
+/** 问一个 pnpm 目录自己用哪个 store，取末段（v3/v10/v11…）。问不到就是空串；结果按目录缓存。 */
+function pnpmStoreVersion(dir) {
+  if (!pnpmStoreCache.has(dir)) pnpmStoreCache.set(dir, probeStoreVersion(dir))
+  return pnpmStoreCache.get(dir)
+}
+
+/**
+ * 直接问 pnpm：优先跑它自己的 `bin/pnpm.cjs`（npm 装的布局都长这样，连 node 都不用猜），
+ * 否则把该目录顶到 PATH 最前面按命令名找 —— 独立安装器那种 `pnpm.exe` 走这条。
+ */
+function probeStoreVersion(dir) {
+  const cli = join(dir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
+  const [command, args] = existsSync(cli)
+    ? [RUNTIME_NODE, [cli, 'store', 'path']]
+    : process.platform === 'win32'
+      ? ['cmd', ['/c', 'pnpm', 'store', 'path']]
+      : ['pnpm', ['store', 'path']]
+  return new Promise((resolve) => {
+    execFile(command, args, {
+      cwd: dir,
+      timeout: 20_000,
+      windowsHide: true,
+      env: { ...process.env, ...RUNTIME_NODE_ENV, PATH: `${dir}${delimiter}${process.env.PATH || ''}` },
+    }, (error, stdout) => {
+      resolve(error ? '' : basename(String(stdout).trim().replace(/\\/g, '/')))
+    })
+  })
+}
+
+/**
+ * 候选里哪个 pnpm 的 store 跟 profile 记的对得上（返回目录）；一个都对不上就返回空串，
+ * 调用方回退到「系统的优先」。probe 可换，便于测试。
+ */
+export async function pickPnpmDir(candidates, wanted, probe = pnpmStoreVersion) {
+  if (!wanted) return ''
+  for (const dir of candidates) {
+    if (await probe(dir) === wanted) return dir
+  }
+  return ''
+}
+
+/** 系统 PATH 里最靠前的那个带 pnpm 的目录。 */
+function systemPnpmDir() {
+  const parts = String(process.env.PATH || '').split(delimiter).filter(Boolean)
+  return parts.find((item) => hasCommand(item, 'pnpm')) || ''
+}
+
+/** 桌面外壳可能继承旧 PATH；补查已安装工具的固定位置，用户 PATH 的工具仍优先。 */
+export function pnpmCandidates(pathValue, env = process.env, root = ROOT) {
+  const candidates = [...String(pathValue || '').split(delimiter).filter(Boolean), join(root, 'node')]
+  if (env.PNPM_HOME) candidates.push(env.PNPM_HOME)
+  if (env.APPDATA) candidates.push(join(env.APPDATA, 'npm'))
+  if (env.LOCALAPPDATA) candidates.push(join(env.LOCALAPPDATA, 'pnpm'), join(env.LOCALAPPDATA, 'Programs', 'DSH', 'node'))
+  return [...new Set(candidates)].filter((dir) => hasCommand(dir, 'pnpm'))
+}
+
+/**
+ * 这份 profile 的插件操作该让哪个 pnpm 排最前。挑不出来就返回空串（排序回到「系统优先」），
+ * 并把手上两边的 store 版本写进日志 —— 否则用户只能看到 pnpm 那句英文错。
+ */
+async function preferredPnpmDir(profile) {
+  const wanted = profileStoreVersion(profileDirOf(profile))
+  const system = systemPnpmDir()
+  const candidates = pnpmCandidates(process.env.PATH)
+  const picked = await pickPnpmDir(candidates, wanted)
+  if (picked) {
+    // 只有「跟老规矩不一样」时才值得记一笔：系统那份仍然优先，改用它自己那份才是新行为
+    if (picked !== system) pushLog(`[插件] 这个 profile 记的是 store ${wanted}，系统那份 pnpm 对不上，改用 ${picked} 里的`)
+    return picked
+  }
+  if (!wanted || !candidates.length) return ''
+  const have = []
+  for (const dir of candidates) have.push((await pnpmStoreVersion(dir)) || '?')
+  pushLog(`[插件] 这个 profile 记的是 store ${wanted}，机器上的 pnpm 是 ${have.join(' / ')}；若 pnpm 报 ERR_PNPM_UNEXPECTED_STORE 就是这个原因`)
+  return ''
+}
+
+/**
+ * 把便携运行时的目录放到 PATH 最前面。
+ *
+ * `dsh plugin` 是 pnpm 的透传器，装插件必须有 pnpm；机器上
+ * 有没有全局 pnpm 全看运气，所以安装包自带一份。另外插件里常带原生模块和 postinstall
+ * 构建脚本，也指望能就地找到 node/npm。系统里已经有 pnpm 时的排序见 orderRuntimePaths。
+ */
+/**
+ * 当前版本自己的命令行入口目录（node_modules/.bin，里面有 dsh / cordis 这些 shim）。
+ * 从 bin 路径往上找 node_modules，兼容「启动器装的版本」和「系统装的 dsh」两种布局。
+ */
+function versionBinDir(version) {
+  let dir = dirname(binPath(version))
+  for (let i = 0; i < 5; i += 1) {
+    if (basename(dir) === 'node_modules') return join(dir, '.bin')
+    if (dir === dirname(dir)) break
+    dir = dirname(dir)
+  }
+  return ''
+}
+
+/**
+ * 写一份「跟着启动器当前版本走」的 dsh 命令行入口。
+ *
+ * 为什么不用版本目录里那个 .bin/dsh.cmd：它的 node 取自 PATH，而我们把用户自己的 node
+ * 排在了前面（见 orderRuntimePaths），用户那套 node 要是太老就带不动 dsh。这里把启动器
+ * 自己的 node 写死，`dsh` 在 shell 里就总是能跑起来，版本也跟着启动器选的那个走。
+ * 打包后的 node 就是 Electron 本体，shim 里要带上 ELECTRON_RUN_AS_NODE，否则 Electron
+ * 会按 GUI 起、把参数当 app 目录。
+ */
+export function writeDshShims(version, options = {}) {
+  const target = options.dir ?? join(DATA, '.bin')
+  const bin = options.bin ?? binPath(version)
+  if (!existsSync(bin)) return ''
+  try {
+    mkdirSync(target, { recursive: true })
+    const node = RUNTIME_NODE
+    const asNode = Boolean(RUNTIME_NODE_ENV.ELECTRON_RUN_AS_NODE)
+    writeFileSync(join(target, 'dsh.cmd'), `@ECHO off\r\n${asNode ? 'SET "ELECTRON_RUN_AS_NODE=1"\r\n' : ''}"${node}" "${bin}" %*\r\n`)
+    const sh = join(target, 'dsh')
+    writeFileSync(sh, `#!/bin/sh\n${asNode ? 'ELECTRON_RUN_AS_NODE=1 ' : ''}exec "${node}" "${bin}" "$@"\n`)
+    try {
+      chmodSync(sh, 0o755)
+    } catch { /* Windows 上无所谓 */ }
+  } catch {
+    return ''
+  }
+  return target
+}
+
+/**
+ * 把当前版本的命令行入口追加到 PATH **末尾**：agent 在 shell 里就能直接 `dsh xxx`，
+ * 版本跟着启动器选的那个走（pyenv 的 shim 就是这个意思）。
+ *
+ * 追加而不是插队：用户自己 PATH 上本来就有 dsh 时优先用他的，我们只在后面的位置兜底。
+ */
+export function withVersionBin(pathValue, ...binDirs) {
+  const parts = String(pathValue).split(delimiter).filter(Boolean)
+  const add = binDirs.filter((dir) => dir && existsSync(dir) && !parts.includes(dir))
+  if (!add.length) return pathValue
+  return [...parts, ...add].join(delimiter)
+}
+
+/** 系统 PATH 里那份 dsh shim 放哪儿：固定目录，和「版本目录」可配置这件事解耦。 */
+export function systemBinDir() {
+  return join(APP_DIR, 'bin')
+}
+
+/**
+ * 在 PATH 字符串里加上/去掉一个目录（纯函数，方便单测）。
+ * 加的时候追加在末尾，用户自己已有的命令仍然优先；去掉时清理空项与重复项。
+ */
+export function pathWithEntry(pathValue, dir, enabled) {
+  const parts = String(pathValue || '').split(delimiter).map((item) => item.trim()).filter(Boolean)
+  const without = parts.filter((item) => item.toLowerCase() !== String(dir).toLowerCase())
+  const next = enabled ? [...without, dir] : without
+  return next.join(delimiter)
+}
+
+/** 手动指令追加在末尾，让用户已有命令优先；目录作为 shell 字面量，不展开其中的 $。 */
+export function manualPathCommand(dir) {
+  return `export PATH="$PATH":'${String(dir).replaceAll("'", "'\\''")}'`
+}
+
+export function manualPathMessage(enabled, dir) {
+  return enabled
+    ? `需要在 shell 配置中手动添加：${manualPathCommand(dir)}；保存后重新打开终端。启动器不会修改 shell 配置。`
+    : `如曾手动添加，请在 shell 配置中移除添加 ${dir} 的 PATH 配置，再重新打开终端。启动器不会修改 shell 配置。`
+}
+
+/** 读/写用户级 PATH（Windows：HKCU\Environment，按 REG_EXPAND_SZ 原样写，不展开变量）。 */
+function readUserPath() {
+  const out = spawnSync('reg', ['query', 'HKCU\\Environment', '/v', 'Path'], { encoding: 'utf8', windowsHide: true })
+  if (out.status !== 0) return ''
+  const line = (out.stdout || '').split(/\r?\n/).find((item) => /\bPath\b\s+REG_/i.test(item))
+  if (!line) return ''
+  return line.replace(/^.*?REG_(?:EXPAND_)?SZ\s+/i, '').trim()
+}
+
+function writeUserPath(value) {
+  const out = spawnSync('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', 'REG_EXPAND_SZ', '/d', value, '/f'], { encoding: 'utf8', windowsHide: true })
+  return out.status === 0
+}
+
+/**
+ * 把 dsh 的 shim 目录加进/移出用户 PATH。Windows 走 HKCU\Environment 的 Path；
+ * 其他平台不改用户的环境（mac 的 PATH 在 shell 配置里，交给用户自己加）。
+ */
+export function applySystemPath(enabled) {
+  const dir = systemBinDir()
+  if (!IS_WINDOWS) {
+    return { ok: false, dir, message: manualPathMessage(enabled, dir) }
+  }
+  const next = pathWithEntry(readUserPath(), dir, enabled)
+  if (!writeUserPath(next)) return { ok: false, dir, message: '写用户 PATH 失败（注册表 HKCU\Environment 不可写？）' }
+  pushLog(enabled ? `已把 ${dir} 加到用户 PATH（新开的终端生效）` : `已把 ${dir} 从用户 PATH 移除`)
+  return { ok: true, dir }
+}
+
+export function withBundledRuntime(pathValue, preferredPnpm = '') {
+  const bundled = join(ROOT, 'node')
+  // 自带运行时目录（现在只剩 npm/pnpm 和它们的命令行包装；node 本体用 Electron 自带的）。
+  // 源码运行没有这个目录，就把 Electron 本体所在目录当兜底条目，和以前一样。
+  const dir = existsSync(bundled) ? bundled : dirname(RUNTIME_NODE)
+  // 原 PATH 已经完整保留，只补固定位置；再筛整条 PATH 会重复探测每个目录的 pnpm 后缀。
+  const parts = [...String(pathValue).split(delimiter).filter(Boolean), ...pnpmCandidates('')]
+  return orderRuntimePaths(parts, dir, preferredPnpm).join(delimiter)
+}
+
+/**
+ * 在 PATH（或用户填的路径）里找系统 node。显式路径优先；只填命令名时按 PATH 找。
+ * 返回路径或空串 —— 设置页据此说明「没找到系统 Node」。可注入 env/platform/exists 便于测试。
+ */
+export function findSystemNode(explicit = '', options = {}) {
+  const env = options.env || process.env
+  const platform = options.platform || process.platform
+  const exists = options.exists || existsSync
+  const name = platform === 'win32' ? 'node.exe' : 'node'
+  const pathDelimiter = platform === 'win32' ? ';' : ':'
+  const dirs = String(env.PATH || '').split(pathDelimiter)
+    .map((dir) => dir.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean)
+  const given = String(explicit || '').trim().replace(/^"(.*)"$/, '$1').trim()
+  if (given) {
+    if (exists(given)) return given
+    // 只填了命令名（没带路径分隔符）：按 PATH 找。Windows 上还要补 PATHEXT 那几种后缀
+    if (!/[\\/]/.test(given)) {
+      const names = platform === 'win32' && !/\.[a-z0-9]+$/i.test(given)
+        ? [given, `${given}.exe`, `${given}.cmd`, `${given}.bat`]
+        : [given]
+      for (const dir of dirs) {
+        for (const name of names) {
+          const file = join(dir, name)
+          if (exists(file)) return file
+        }
+      }
+    }
+    return ''
+  }
+  for (const dir of dirs) {
+    const file = join(dir, name)
+    if (exists(file)) return file
+  }
+  return ''
+}
+
+const nodeVersionCache = new Map()
+
+/** 问一个 node 可执行文件的版本（`v24.9.0` → `24.9.0`）；跑不起来返回空串（失败不缓存，换文件后还能重问）。 */
+export function nodeVersionOf(file) {
+  if (!file) return ''
+  if (nodeVersionCache.has(file)) return nodeVersionCache.get(file)
+  let version = ''
+  try {
+    const out = spawnSync(file, ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+    const match = /^v?(\d+\.\d+\.\d+)/.exec(String(out.stdout || '').trim())
+    if (match) version = match[1]
+  } catch { /* 不是 node / 跑不起来 */ }
+  if (version) nodeVersionCache.set(file, version)
+  return version
+}
+
+/** dsh 的 engines.node 只认 `>=x.y.z`（官方包就是这么写的）；别的范围返回空串，不拿它下结论。 */
+export function parseNodeRange(range) {
+  const match = /^>=\s*(\d+\.\d+\.\d+)$/.exec(String(range || '').trim())
+  return match ? match[1] : ''
+}
+
+/**
+ * 已装版本里最高的 Node 要求（dsh 的 package.json engines.node）。系统 node 低于它时设置页要
+ * 提醒：dsh 自己不拦版本，报错会出现在别处，很难看出是 node 太老。
+ */
+function nodeRequirementForInstalled() {
+  let best = ''
+  for (const version of scanInstalled()) {
+    try {
+      const file = join(dirname(binPath(version)), '..', 'package.json')
+      const min = parseNodeRange(JSON.parse(readFileSync(file, 'utf8')).engines?.node)
+      if (min && (!best || cmpVer(parseVer(min), parseVer(best)) > 0)) best = min
+    } catch { /* 读不到就不算 */ }
+  }
+  return best
+}
+
+/**
+ * 设置页「运行 dsh 的 Node」要显示的一切：配置值、现在生效的那个、系统里找到的那个。
+ *
+ * 「生效」在 Electron 里看 RUNTIME_NODE_ENV：只有落到 Electron 本体时才带 ELECTRON_RUN_AS_NODE。
+ * 源码运行（node start.js）时 dsh 就是用启动它的那个 node，这个设置没有意义（selectable=false）。
+ */
+export function nodeRuntimeView(stored) {
+  const configured = safeNodeRuntime(stored.nodeRuntime)
+  const configuredPath = safeSystemNodePath(stored.systemNodePath)
+  const systemPath = findSystemNode(configuredPath)
+  const system = systemPath ? { path: systemPath, version: nodeVersionOf(systemPath) } : null
+  const bundled = { path: process.execPath, version: process.versions.node }
+  const bundledActive = IN_ELECTRON && Boolean(RUNTIME_NODE_ENV.ELECTRON_RUN_AS_NODE)
+  const effective = !IN_ELECTRON
+    ? { kind: 'system', path: process.execPath, version: process.versions.node }
+    : bundledActive
+      ? { kind: 'bundled', path: process.execPath, version: process.versions.node }
+      : { kind: 'system', path: RUNTIME_NODE, version: nodeVersionOf(RUNTIME_NODE) }
+  const requirement = nodeRequirementForInstalled()
+  const pending = IN_ELECTRON && (configured !== effective.kind
+    || (configured === 'system' && system && !fileManager.samePath(effective.path, system.path)))
+  const below = (version) => Boolean(requirement && version && cmpVer(parseVer(version), parseVer(requirement)) < 0)
+  return {
+    selectable: IN_ELECTRON,
+    configured,
+    configuredPath,
+    bundled,
+    system,
+    effective,
+    pending,
+    requirement,
+    systemTooOld: below(system?.version),
+    effectiveTooOld: below(effective.version),
+  }
+}
+
+function assertLauncherIdle() {
+  if (instances.size || startingProfiles.size) throw new Error('请先停止正在运行的 DSH，再安装整合包')
+}
+
+/** 当前 profile 目录。 */
+/**
+ * 插件安装/升级的进度事件：多带 kind 与插件名，页面据此画插件页自己的进度条。
+ * 传 null 表示结束（页面上就是把进度条收起来）。
+ */
+function emitPluginProgress(state) {
+  pluginProgress = state
+  emit('progress', state ? { ...state, kind: 'plugin', name: pluginProgressName, profile: pluginProgressProfile } : { phase: 'idle', kind: 'plugin' })
+}
+
+/**
+ * 指名 profile 的目录。实例按启动时那份 profile 定向（插件操作、补丁层、依赖重建
+ * 都得落到它自己头上）；不传就是当前 profile，跟老的 profileDir() 一个意思。
+ */
+function profileDirOf(profile = PROFILE_NAME) {
+  return join(homeDir(), 'profiles', safeProfile(profile))
+}
+
+/** 当前 profile 目录。 */
+function profileDir() {
+  return profileDirOf(PROFILE_NAME)
+}
+
+// ---- profile 配置层备份（每次启动前快照，出事了能回退） ----
+// 为什么不整目录复制：profile 里的 node_modules 动辄几百 MB，每次启动都复制不现实；
+// 真正会被改坏、回退时值得救的是配置层（补丁层、依赖清单、npmrc），加起来几十 KB。
+// 备份放在数据目录 backups/profiles/<用户目录指纹>/<profile>/<时间戳>/，跟数据一起走；
+// 多个 dsh 用户目录里同名 profile 靠指纹分开，互不覆盖。
+const PROFILE_BACKUP_FILES = ['cordis.patch.yml', 'package.json', 'pnpm-lock.yaml', '.npmrc']
+const PROFILE_BACKUP_KEEP = 10
+const PROFILE_BACKUP_ID = /^\d{8}-\d{6}(?:-\d+)?$/
+
+function homeStamp(home = homeDir()) {
+  return createHash('sha1').update(IS_WINDOWS ? home.toLowerCase() : home).digest('hex').slice(0, 12)
+}
+
+function profileBackupRoot(profile, home = homeDir()) {
+  return join(DATA, 'backups', 'profiles', homeStamp(home), safeProfile(profile))
+}
+
+function profileBackupTimestamp(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
+function readBackupManifest(dir) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'))
+    if (!manifest || !Array.isArray(manifest.files)) return null
+    return manifest
+  } catch { return null }
+}
+
+/** 最近的排前面。目录名是时间戳，但 createdAt 才是权威（手改目录名也不会乱序）。 */
+function listProfileBackups(profile, home = homeDir()) {
+  const root = profileBackupRoot(profile, home)
+  if (!existsSync(root)) return []
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && PROFILE_BACKUP_ID.test(entry.name))
+    .map((entry) => ({ id: entry.name, ...readBackupManifest(join(root, entry.name)) }))
+    .filter((item) => item.files && item.createdAt)
+    .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
+}
+
+function profileConfigSnapshot(profileDirPath) {
+  const files = []
+  for (const name of PROFILE_BACKUP_FILES) {
+    const file = join(profileDirPath, name)
+    if (!existsSync(file)) continue
+    try { files.push({ name, content: readFileSync(file) }) } catch { /* 读不了就跳过，别拦启动 */ }
+  }
+  const hash = createHash('sha256')
+  for (const file of files) hash.update(file.name).update('\0').update(file.content)
+  return { files, signature: hash.digest('hex') }
+}
+
+async function rotateProfileBackups(profile, home = homeDir()) {
+  const root = profileBackupRoot(profile, home)
+  for (const stale of listProfileBackups(profile, home).slice(PROFILE_BACKUP_KEEP)) {
+    await rm(join(root, stale.id), { recursive: true, force: true })
+  }
+}
+
+/**
+ * 给 profile 的配置层拍一份快照；内容跟最近一份一样就不重复存（每次启动都会调用它）。
+ * force 用在回退之前：那份「回退前」的备份即使内容没变也要留着，回退本身才可逆。
+ */
+async function snapshotProfileConfig(profile, { force = false } = {}) {
+  const name = safeProfile(profile || PROFILE_NAME)
+  const dir = profileDirOf(name)
+  if (!existsSync(join(dir, 'package.json'))) return null   // 还没初始化，没什么可救
+  const { files, signature } = profileConfigSnapshot(dir)
+  if (!files.length) return null
+  const home = homeDir()
+  const root = profileBackupRoot(name, home)
+  const latest = listProfileBackups(name, home)[0]
+  if (!force && latest?.signature === signature) return null
+  await mkdir(root, { recursive: true })
+  const stamp = profileBackupTimestamp()
+  let id = stamp
+  for (let index = 2; existsSync(join(root, id)); index += 1) id = `${stamp}-${index}`
+  const target = join(root, id)
+  await mkdir(target)
+  for (const file of files) await writeFile(join(target, file.name), file.content)
+  const manifest = { profile: name, home, createdAt: Date.now(), signature, files: files.map((file) => ({ name: file.name, size: file.content.length })) }
+  await writeFile(join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  await rotateProfileBackups(name, home)
+  return { id, ...manifest }
+}
+
+/** 回退到某份配置快照：先给当前状态再存一份，所以回退本身也能再退回来。 */
+async function restoreProfileConfig(profile, id) {
+  const name = safeProfile(profile || PROFILE_NAME)
+  if (!PROFILE_BACKUP_ID.test(String(id || ''))) throw new Error('备份编号不对')
+  const home = homeDir()
+  const root = profileBackupRoot(name, home)
+  const source = join(root, String(id))
+  const manifest = readBackupManifest(source)
+  if (!manifest) throw new Error('找不到这份备份')
+  if (!manifest.files.some((file) => file.name === 'package.json')) throw new Error('这份备份里没有 package.json，回退会让 Profile 起不来')
+  if (instanceList().some((proc) => proc.profile === name && ['starting', 'running', 'stopping'].includes(proc.status))) throw new Error('请先停止这个 Profile 的实例再回退')
+  const dir = profileDirOf(name)
+  const saved = await snapshotProfileConfig(name, { force: true })
+  for (const file of PROFILE_BACKUP_FILES) {
+    const target = join(dir, file)
+    const included = manifest.files.some((entry) => entry.name === file)
+    if (included) await writeFile(target, readFileSync(join(source, file)))
+    else if (existsSync(target)) await rm(target, { force: true })
+  }
+  pushLog(`[备份] Profile ${name} 回退到 ${id}${saved ? `（回退前已存一份 ${saved.id}）` : ''}`)
+  return { ok: true, restored: String(id), backup: saved }
+}
+
+/**
+ * 配置层回退之后再按清单把依赖装齐。
+ *
+ * 备份里只有配置文件，node_modules 不在其中；回退可能让 package.json 重新引用已经卸掉的
+ * 包，插件页就会整片「包不可用」。这里跑一次 `dsh plugin install`，让 node_modules 和
+ * 还原后的清单对齐。装失败不影响回退本身，只把原因带回去给页面显示。
+ */
+async function reinstallAfterRollback(profile) {
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(join(profileDirOf(profile), 'package.json'), 'utf8'))
+  } catch {
+    return null
+  }
+  const dependencies = manifest?.dependencies
+  // 没有直接依赖就没什么可装的（官方 bundle 由 dsh 自己带），别白起一次 pnpm。
+  if (!dependencies || typeof dependencies !== 'object' || !Object.keys(dependencies).length) return { ok: true, skipped: true }
+  if (pluginBusy) return { ok: false, error: '正在装插件或整合包，跳过依赖重装' }
+  let version
+  try {
+    version = await pluginCommandVersion(profile)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  pluginBusy = true
+  try {
+    await runProfileInstall(version, { profile })
+    pushLog(`[备份] Profile ${profile} 回退后已重装依赖`)
+    return { ok: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    pushLog(`[备份] Profile ${profile} 回退后重装依赖失败：${message}`)
+    return { ok: false, error: message }
+  } finally {
+    pluginBusy = false
+  }
+}
+
+/**
+ * 这次启动要不要开局域网代理：只看设置里的 Web 绑定。
+ * 远程访问插件的「局域网访问」开关不再参与：新版插件自己起转发，旧版写的 0.0.0.0
+ * 补丁块在 dsh 0.2.1-rc.2 起本来就会被拒（通配地址不再支持）。
+ * 纯函数（参数缺省取模块状态），方便单测。
+ */
+export function lanBindActive(webBind = WEB_BIND) {
+  return webBind === 'lan'
+}
+
+/** 设置页的额外启动参数 + DSH.exe 命令行传来的参数，后者拼在后面（更具体，覆盖前者）。 */
+function composeExtraArgs(settingsText) {
+  return [...parseArgs(settingsText), ...CLI_ARGS]
+}
+
+/** 当前 profile 的用户补丁层：插件开关、MCP 条目、本地技能覆盖都写这里。 */
+function patchFile() {
+  return join(profileDir(), 'cordis.patch.yml')
+}
+
+/** 技能接口的统一载荷：列表 + 两个受管根 + 本地技能总开关状态。 */
+// 预览保留下载时的字节，安装时不重新抓可变分支；限量缓存，十分钟自动失效。
+const skillImports = new Map()
+const SKILL_IMPORT_TTL = 10 * 60 * 1000
+function pruneSkillImports() {
+  for (const [token, item] of skillImports) if (item.expires < Date.now()) skillImports.delete(token)
+}
+function skillsPayload() {
+  const roots = skillRoots(homeDir())
+  return {
+    skills: listSkills(roots),
+    roots,
+    localSkills: localSkillsEnabled(profileDir()),
+  }
+}
+
+// ---- 同步：会话记录、附件与插件配置传到远端（S3 兼容对象存储 / WebDAV） ----
+
+/** 同步接口的统一载荷：配置（含密钥，页面要回显）+ 可选项 + 正在跑的进度。 */
+function syncPayload() {
+  const store = storeConfig()
+  return {
+    store: store.store,
+    storeTypes: STORE_TYPES,
+    s3: S3_CONFIG,
+    webdav: WEBDAV_CONFIG,
+    folder: FOLDER_CONFIG,
+    zip: ZIP_CONFIG,
+    sync: SYNC_OPTIONS,
+    scopes: SYNC_SCOPES,
+    policies: [
+      { id: 'skip', label: '保留本机', hint: '本机不动；远端那份也留着，下次换个策略再拉' },
+      { id: 'overwrite', label: '用远端的覆盖本机', hint: '以远端为准（适合「刚换的新机器」）' },
+      { id: 'duplicate', label: '两份都留', hint: '本机不动，远端那份另存成 …remote-日期 的文件' },
+    ],
+    styles: [
+      { id: 'auto', label: '自动（IP 用路径风格，域名用虚拟主机）' },
+      { id: 'path', label: '路径风格（MinIO / Ceph 等自建存储）' },
+      { id: 'virtual', label: '虚拟主机（bucket.域名/…）' },
+    ],
+    homes: [
+      { id: 'sessions', dir: join(homeDir(), 'sessions') },
+      { id: 'attachments', dir: join(homeDir(), 'attachments') },
+      { id: 'plugins', dir: profileDir() },
+      { id: 'skills', dir: skillRoots(homeDir()).map((root) => root.dir).join('\n') },
+      { id: 'memory', dir: join(homeDir(), 'memory') },
+    ],
+    home: homeDir(),
+    profile: PROFILE_NAME,
+    remoteUrl: storeDisplayUrl(store),
+    configured: storeConfigured(store),
+    missing: storeMissing(store),
+    state: syncState,
+    running: syncRunning,
+  }
+}
+
+/** 同步进度的唯一出口：存一份给页面刷新时回放，再推给所有打开的页面。 */
+function emitSync(state) {
+  syncState = state
+  emit('sync', state)
+}
+
+/**
+ * 跑一次同步。POST 一直等到跑完才回（页面按钮期间禁用，和插件安装同一条路），
+ * 过程靠 SSE 的 sync 事件画进度条；用户点「停止」时引擎会在下一个文件前收手。
+ */
+async function runSyncJob(mode, options = {}) {
+  if (syncRunning) throw new Error('上一次同步还没结束')
+  if (pluginBusy || installing) throw new Error('正在装插件或版本，等它结束再同步')
+  const store = storeConfig()
+  if (!storeConfigured(store)) throw new Error(`远端还没填完：${storeMissing(store).join('、')}`)
+  const scopes = safeSyncSettings({
+    store: options.store ?? SYNC_OPTIONS.store,
+    scopes: options.scopes ?? SYNC_OPTIONS.scopes,
+    policy: options.policy ?? SYNC_OPTIONS.policy,
+  })
+  const policy = scopes.policy
+  const force = options.force === true
+  const label = mode === 'up' ? '上传' : '下载'
+  syncRunning = true
+  syncStopRequested = false
+  const startedAt = Date.now()
+  emitSync({ phase: 'start', mode, done: 0, total: 0, at: startedAt })
+  pushLog(`[同步] 开始${label}：${scopes.scopes.map(scopeLabel).join('、')} → ${storeDisplayUrl(store)}`)
+  try {
+    const summary = await runSync({
+      mode,
+      scopes: scopes.scopes,
+      config: { ...store, store: scopes.store },
+      policy,
+      force,
+      context: {
+        home: homeDir(),
+        profile: PROFILE_NAME,
+        profileDir: profileDir(),
+        roots: skillRoots(homeDir()),
+      },
+      log: (line) => pushLog(line),
+      shouldStop: () => syncStopRequested,
+      onProgress: (state) => emitSync({ ...state, mode, at: Date.now() }),
+    })
+    summary.seconds = Math.round((Date.now() - startedAt) / 1000)
+    summary.mode = mode
+    // 插件清单变了（合并出了新的插件）就把依赖装上，否则清单和 node_modules 对不上，
+    // dsh 起来会说 cannot resolve profile bundle
+    if (summary.manifestChanged && !summary.stopped) {
+      try {
+        const version = await pluginCommandVersion()
+        emitSync({ phase: 'install', mode, label: '重装插件依赖', at: Date.now() })
+        pushLog('[同步] 插件清单有变化，重装 profile 依赖…')
+        pluginBusy = true
+        await runProfileInstall(version)
+        summary.installed = true
+        summary.notes.push('插件依赖已重装')
+      } catch (error) {
+        summary.installError = error instanceof Error ? error.message : String(error)
+        summary.notes.push(`插件依赖重装失败：${summary.installError}`)
+        pushLog(`[同步] 插件依赖重装失败：${summary.installError}`)
+      } finally {
+        pluginBusy = false
+        emitPluginProgress(null)
+      }
+    }
+    if (mode === 'down' && instances.size) {
+      summary.notes.push('dsh 正在运行：新拉来的会话和插件要重启 dsh 才生效')
+    }
+    pushLog(`[同步] ${label}完成：上传 ${summary.uploaded} 个、下载 ${summary.downloaded} 个、清单合并 ${summary.merged} 处、跳过 ${summary.skipped} 个${summary.stopped ? '（已停止）' : ''}，用时 ${summary.seconds}s`)
+    emitSync({ phase: 'done', mode, at: Date.now(), summary })
+    return summary
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    pushLog(`[同步] ${label}失败：${message}`)
+    emitSync({ phase: 'error', mode, at: Date.now(), error: message })
+    throw new Error(message)
+  } finally {
+    syncRunning = false
+  }
+}
+
+/** 日志与摘要里的范围名。 */
+function scopeLabel(id) {
+  return SYNC_SCOPES.find((scope) => scope.id === id)?.label || id
+}
+
+/**
+ * 连接自检：能走到远端、认证过不过、我们的目录里有没有东西。
+ * 填错地址/密钥是最常见的失败，先有一次「点一下就知道」的检查，不用真的跑同步。
+ */
+async function testSyncConnection() {
+  const store = storeConfig()
+  const client = storeClient(store)
+  const info = await client.test()
+  pushLog(`[同步] 连接正常：${info.host}（${info.detail}），${info.namespace}/ ${info.empty ? '还没有内容' : '已有内容'}`)
+  return info
+}
+
+/**
+ * 这个 profile 会不会起 web 应用——只有它认 `--host/--port/--no-open` 这几个 flag，
+ * 别的 app 会把它们打回 `unknown option` 并 exit 1。官方 web 模板直接认名；自定义
+ * profile（比如从 web 模板建出来的）看清单的 bundle 列表里启没启 dsh-web-app。
+ * 清单读不了就当不会起：顶多是启动后没有地址可读（headless 本来就没有）。
+ */
+function bootsWebApp(profile = PROFILE_NAME) {
+  return profileBootsWebIn(homeDir(), profile)
+}
+
+/** 同上，但 home 由调用方给定（别的 DSH_HOME 环境下的 profile 也认）。 */
+function profileBootsWebIn(home, name) {
+  if (name === 'web') return true
+  try {
+    const manifest = JSON.parse(readFileSync(join(home, 'profiles', name, 'package.json'), 'utf8'))
+    const bundles = manifest?.dsh?.profile?.bundles
+    return Array.isArray(bundles) && bundles.includes('@deepseek-ai/dsh-web-app')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 右侧栏浏览器的覆盖补丁：外壳已经提供原生 webview 载体（见 shell/browser-guests.mjs），
+ * 这里只把官方 `ui-sidebar-browser` 行从 web-app bundle 的「非 desktop profile 禁用」里放开。
+ * 走 `--patch` 叠加层，不改用户的 profile 文件，也不要求 profile 改名叫 desktop。
+ */
+const SIDEBAR_BROWSER_PATCH_HEADER = '# 由 DSH-X 外壳生成：右侧栏浏览器（原生 webview 载体见 shell/browser-guests.mjs）。'
+
+function sidebarBrowserPatchText() {
+  // 只做一件事：把官方右侧栏 Browser 那一行放开（web profile 默认是关的）。
+  // 右键菜单 / 侧栏浏览器控制两个插件装不装、开不开，归 dsh 插件页管。
+  return `${SIDEBAR_BROWSER_PATCH_HEADER}\n- id: ui-sidebar-browser\n  disabled: false\n`
+}
+
+function sidebarBrowserPatchArgs(profile) {
+  // desktop profile 默认就放开 ui-sidebar-browser，没有要覆盖的
+  if (String(profile ?? '').toLowerCase() === 'desktop') return []
+  try {
+    const file = join(DATA, 'shell', 'sidebar-browser.patch.yml')
+    mkdirSync(dirname(file), { recursive: true })
+    let current = ''
+    try {
+      current = readFileSync(file, 'utf8')
+    } catch { /* 还没有：写一份 */ }
+    const text = sidebarBrowserPatchText()
+    if (current !== text) writeFileSync(file, text)
+    return ['--patch', file]
+  } catch (error) {
+    pushLog(`右侧栏浏览器补丁写不出来：${error instanceof Error ? error.message : error}`)
+    return []
+  }
+}
+
+/**
+ * dsh 启动参数。Web 绑定选哪种都一样：dsh 只绑回环，局域网由启动器的代理负责
+ * （dsh 不接受 0.0.0.0，绑具体局域网 IP 又会让本机回环和启动器的探活全部失效）。
+ * @param {string} profile 这次启动用的 profile（多开下同一版本可以各用各的）
+ * @param {number} pinned 手工固定或自动记忆的端口（0 = 首次，由系统挑）
+ */
+function bootArgs(profile = PROFILE_NAME, pinned = 0) {
+  // 不起 web 的 profile（headless / acp / sdk…）不提供 HTTP 服务，也不认这几个 flag：
+  // 参数是透传给 profile 对应 app 的，会被它自己的 commander 打回 `unknown option`
+  // 并 exit 1（`dsh headless --no-open` 就是这条），所以只对会起 web 的注入
+  if (!bootsWebApp(profile)) return [profile, ...EXTRA_ARGS]
+  // profile 名必须排在第一个；launcher 自己的 flag（--patch 等）放在 profile 之后、
+  // app 参数之前（见 dsh 的 `dsh tui --patch ./extra.yml` 示例）。
+  const overlay = sidebarBrowserPatchArgs(profile)
+  const port = pinned > 0 ? String(pinned) : '0'
+  // 默认姿势：钉死回环 + 端口（首次 --port 0，让 OS 现挑一个；dsh 会把真实地址
+  // 打出来，启动器读它，所以顺延也不影响页面拿到链接）。
+  // 额外参数放最后：用户可以用它覆盖 --port 之类（启动器是从 dsh 的输出里读真实地址的，
+  // 所以换个端口也不影响管理页拿到的链接）
+  return [profile, ...overlay, '--host', '127.0.0.1', '--port', port, '--no-open', ...EXTRA_ARGS]
+}
+
+/** 这个「版本 × profile」手工固定的端口（0 = 自动分配并记忆）。 */
+function pinnedPort(version, profile) {
+  const ports = homeDir() === defaultHome() ? INSTANCE_PORTS : ENVIRONMENT_PORTS[homeDir()]
+  return ports?.[`${version}@${profile}`] || 0
+}
+
+/** 自动端口：局域网模式也一样记（dsh 照样绑回环，端口不变局域网链接也不变）；用户额外参数仍由用户决定。 */
+function remembersAutoPort(profile, pinned) {
+  return !pinned && bootsWebApp(profile)
+    && !EXTRA_ARGS.some((arg) => /^--(?:port|host)(?:=|$)/.test(arg))
+}
+
+const claimedAutoPorts = new Set()
+/** 复用前等监听的次数与间隔：刚停掉的实例偶尔还占着端口一小会儿（Windows 的 TIME_WAIT）。 */
+const AUTO_PORT_PROBES = 3
+const AUTO_PORT_PROBE_WAIT_MS = 300
+
+/**
+ * 自动端口的候选记录：先认这个「版本 × profile」自己记的，没有再认同一个 profile 别的版本记的。
+ *
+ * 为什么其他版本的也要认：启动项的版本是 auto 时，DSH 一升级，实例键就从
+ * `<旧版本>@web` 变成 `<新版本>@web`，端口记忆跟着键一起作废。可 dsh 页面把工作区的分组方式、
+ * 展开状态、草稿这些东西放在 localStorage 里，而 localStorage 按 origin 隔离——端口一变，
+ * 页面就像被重置了。所以换版本要沿用旧端口，跟「固定端口跟着启动项换版本挪过去」是同一个理由。
+ * 排序上先认启动项的上一个版本（用户刚刚在看的那个 origin），再按写入顺序倒着找
+ * （设置文件里越靠后是越近记下的）。
+ * @returns {{key: string, port: number}[]} 按优先级排好的候选
+ */
+function autoPortCandidates(stored, version, profile) {
+  const ports = safeEnvironmentPorts(stored.autoPorts)[homeDir()] || {}
+  const own = `${version}@${profile}`
+  if (ports[own]) return [{ key: own, port: ports[own] }]
+  const launch = safeLaunchPresets(stored.launchPresets)
+    .find((item) => item.id === launchScope.getStore()?.launchId)
+  const previous = [launch?.prevVersion, launch?.usedVersion]
+    .filter(Boolean).map((used) => `${used}@${profile}`)
+  const rest = Object.keys(ports).filter((key) => key.endsWith(`@${profile}`)).reverse()
+  const seen = new Set([own])
+  const candidates = []
+  for (const key of [...previous, ...rest]) {
+    if (seen.has(key) || !ports[key]) continue
+    seen.add(key)
+    candidates.push({ key, port: ports[key] })
+  }
+  return candidates
+}
+
+/** 这个端口这次真的能拿来复用吗（不能的话调用方会换一个新的）。 */
+async function autoPortUsable(port, stored) {
+  // 自动端口不能抢手工指定给其他实例的端口；真实监听也要检查（含别的程序）。
+  const reserved = [stored.instancePorts, ...Object.values(liveEnvironmentPorts(stored))]
+    .some((ports) => Object.values(ports || {}).includes(port))
+    || safeLaunchPresets(stored.launchPresets).some((entry) => entry.port === port)
+  // 检查监听会让出执行权；不同目录的并发启动不能同时复用同一个历史端口。
+  if (reserved || port === PORT || port === stored.port || claimedAutoPorts.has(port)) return false
+  if (instanceOnPort(port)) return false
+  // 端口能不能绑要等刚退出的进程真正放手，多试几次再下结论：
+  // 这里误判一次，实例就换了端口，页面里的本地状态跟着清零。
+  for (let attempt = 0; attempt < AUTO_PORT_PROBES; attempt += 1) {
+    if (await portAvailable(port)) return true
+    if (attempt + 1 < AUTO_PORT_PROBES) await new Promise((resolve) => setTimeout(resolve, AUTO_PORT_PROBE_WAIT_MS))
+  }
+  return false
+}
+
+/**
+ * 这次启动要复用的自动端口（0 = 让系统现挑一个）。
+ * @returns {{port: number, key: string}} key = 端口是从哪条记录复用的（日志用）
+ */
+async function rememberedPort(version, profile) {
+  const stored = await loadSettings()
+  const candidates = autoPortCandidates(stored, version, profile)
+  for (const { key, port } of candidates) {
+    if (!(await autoPortUsable(port, stored))) continue
+    claimedAutoPorts.add(port)
+    return { port, key }
+  }
+  // 有记录但都不能用：这次只能换端口。换端口就是换 origin，页面里的本地状态会从默认值重来，
+  // 不写清楚的话，用户只会看到界面「莫名其妙被重置」。
+  if (candidates.length) {
+    pushLog(`自动端口 ${candidates.map(({ port }) => port).join('、')} 已被占用或保留，将重新分配；页面地址会变，浏览器里的授权和本地状态（分组方式、展开状态等）会重置`)
+  }
+  return { port: 0, key: '' }
+}
+
+async function rememberAutoPort(version, profile, url) {
+  const port = urlPortOf(url)
+  if (!port) return
+  const home = homeDir(), key = `${version}@${profile}`
+  try {
+    // 不同目录可以同时启动，读改写必须在设置写队列里合并，不能覆盖另一项刚记下的端口。
+    await saveSettings((current) => {
+      const autoPorts = safeEnvironmentPorts(current.autoPorts)
+      return { autoPorts: { ...autoPorts, [home]: { ...autoPorts[home], [key]: port } } }
+    })
+  } catch (error) {
+    pushLog(`记忆自动端口失败：${error instanceof Error ? error.message : error}`)
+  }
+}
+
+/** 地址里的端口（认不出来就是 0：这种地址不该让调用方炸掉）。 */
+function urlPortOf(url) {
+  try {
+    return Number(new URL(url).port) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** 这个端口上是不是我们自己某个在跑的实例（报错时说得出是谁占着）。 */
+function instanceOnPort(port) {
+  for (const proc of instanceList()) {
+    if (proc.url && urlPortOf(proc.url) === port) return proc
+  }
+  return null
+}
+
+/**
+ * 端口现在空不空：先建一个独占的监听再立刻关掉。
+ *
+ * Windows 上 TIME_WAIT 里的端口也会报占用（libuv 在 Windows 不给 TCP 设 SO_REUSEADDR），
+ * 而那多半是刚停掉的实例留下的——所以这个结论只用来「把问题说给用户听」，不作为
+ * 拦着不让启动的理由：真绑不上，dsh 自己会失败，那条路照样能把话说清楚。
+ */
+function portAvailable(port) {
+  return new Promise((resolve) => {
+    const probe = createNetServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => probe.close(() => resolve(true)))
+    probe.listen({ port, host: '127.0.0.1', exclusive: true })
+  })
+}
+
+/**
+ * dsh 绑不上端口时，Node 会抛 `listen EADDRINUSE: address already in use 127.0.0.1:3790`，
+ * 这条错误就落在它 stderr 的尾巴里。认出来只为把话说明白：固定端口起不来的头号原因
+ * 就是这个，而「启动失败」四个字对用户没有任何帮助。
+ * @returns 一句人话，没认出端口冲突就是空串
+ */
+function describePortConflict(pinned, proc) {
+  if (!/EADDRINUSE|address already in use/i.test((proc.tail || []).join('\n'))) return ''
+  const who = instanceOnPort(pinned)
+  const holder = who ? `${who.version}/${who.profile} 正在用它` : '别的程序占着'
+  return `端口 ${pinned} 被占用（${holder}）：换一个端口，或先停掉占着它的东西`
+}
+
+/** dsh 子进程的加载钩子：启动加速 + 会话事件词汇兼容（含 worker 线程那份）。 */
+const HOOKS = [
+  join(ROOT, 'perf', 'register.mjs'),
+  join(ROOT, 'compat', 'register.mjs'),
+].filter((file) => existsSync(file))
+
+/**
+ * worker 线程用 --require 注入（execArgv 被清空，只有 NODE_OPTIONS 能传进去）。
+ *
+ * NODE_OPTIONS 是按空格分词的，安装目录带空格（装到 `D:\Program Files\DSH` 这种）会被
+ * 切成半截路径，node 拿它去 require 直接起不来——报 `Cannot find module 'D:/Program'`。
+ * 所以这里写绝对路径，但写法有讲究：
+ *
+ * - 加引号能挡住空格，但**引号会把反斜杠吃掉**：`--require "C:\a b\x.cjs"` 会变成
+ *   `C:abx.cjs`（引号、反斜杠转义都救不了，正是这里踩过的坑）；
+ * - 把反斜杠换成正斜杠就没事：node 与 Electron 都认 `C:/a b/x.cjs`，空格也不再是问题。
+ *
+ * 以前是靠「NODE_PATH 传目录 + NODE_OPTIONS 里只写裸文件名」绕开空格的，但 **NODE_PATH 只在
+ * 纯 Node 里生效**：Electron 主进程的模块加载器初始化不消费它，裸文件名直接 Cannot find
+ * module，把 Electron 应用整个顶死（它在任何 JS 起来之前就退了）。而这份 NODE_OPTIONS 会被
+ * dsh 的**所有**子进程继承，agent 在 shell 里跑 Electron 是常规操作，不能留这个坑。
+ */
+const WORKER_COMPAT = join(ROOT, 'compat', 'worker-events.cjs')
+
+/** 绝对路径进 NODE_OPTIONS 的写法：反斜杠换正斜杠，只有含空白时才包引号。 */
+export function nodeOptionsPath(target) {
+  const slashed = target.replace(/\\/g, '/')
+  return /\s/.test(slashed) ? `"${slashed}"` : slashed
+}
+
+/**
+ * dsh 的 CLI 会在参数解析阶段就拒掉的 profile 名（现在只有 `desktop` —— 官方把它留给自家
+ * Electron 端），拿 `lib/bin.js` 起它必然当场报错。这个名单上的 profile 改用
+ * `reserved-profile-boot.mjs`：它直接调 boot 层的 `runProfile`（官方桌面端走的也是这条路），
+ * 而 argv 形状与 CLI 一模一样，所以除入口本身，参数、环境、钩子一个字都不用改。
+ */
+const CLI_BLOCKED_PROFILES = new Set(['desktop'])
+const RESERVED_BOOT = join(ROOT, 'reserved-profile-boot.mjs')
+
+/** 这次该跑哪个入口：普通 profile 用版本目录里的 `lib/bin.js`，保留名换成绕行入口。 */
+function bootEntry(version, profile) {
+  return CLI_BLOCKED_PROFILES.has(String(profile ?? '').toLowerCase()) ? RESERVED_BOOT : binPath(version)
+}
+
+/**
+ * 保留名 profile 的「别名目录」名。插件命令走的是官方 CLI（`dsh plugin --profile <名字>`），
+ * 而 dsh 只按名字找 profile、没有传路径的入口 —— 所以要在同一个 profiles/ 下给它一个 CLI 认得出的
+ * 名字，用目录链接指回原目录：**一份目录两个名字**，不复制（官方桌面端改了插件不会有第二份要同步）、
+ * 不依赖 dsh 内部结构（用的是公开的 CLI 参数）。前导点让它不出现在 profile 列表里（listProfiles 也显式跳过）。
+ */
+export function aliasProfileName(profile) {
+  return `.dsh-alias-${String(profile).toLowerCase()}`
+}
+
+/**
+ * 确保别名存在并指向 profile 目录，返回别名；建不出来就返回空串（调用方回退到原名，让 dsh 自己报那句英文错）。
+ * 幂等：已经是链接且指向对就直接返回；那里有别的实体（真目录、指向别处的链接）就不碰它。
+ * Windows 用 junction（普通用户可建，不需要管理员/开发者模式），其余平台用目录软链。
+ */
+export function ensureProfileAlias(profile, root = join(homeDir(), 'profiles')) {
+  const target = join(root, safeProfile(profile))
+  if (!existsSync(join(target, 'package.json'))) return ''
+  const name = aliasProfileName(profile)
+  const path = join(root, name)
+  try {
+    if (lstatSync(path).isSymbolicLink() && realpathSync(path) === realpathSync(target)) return name
+    return ''
+  } catch { /* 还没有：建一个 */ }
+  try {
+    symlinkSync(target, path, fileManager.directoryLinkType)
+    return name
+  } catch (error) {
+    pushLog(`[插件] 建 ${name} 别名失败（${error instanceof Error ? error.message : error}）：这个保留名 profile 的插件操作仍会被 dsh 拒掉`)
+    return ''
+  }
+}
+
+/**
+ * 拉起 dsh 时的命令行参数。
+ *
+ * dsh 自己的开关（系统证书库、请求头上限、两个 ESM 补丁钩子）放这里而不是 NODE_OPTIONS：
+ * NODE_OPTIONS 会被 dsh 的所有子进程继承，agent 在 shell 里跑的 node 万一是老版本，
+ * 撞上 --use-system-ca 这类新开关就直接 bad option 退出。worker 线程那份 CJS 补丁仍在
+ * NODE_OPTIONS 里（worker 的 execArgv 是空的，命令行传不进去），见 dshEnv。
+ */
+export function dshArgs(version, extra = [], profile = '') {
+  const entry = bootEntry(version, profile)
+  return [
+    '--use-system-ca',
+    '--max-http-header-size=131072',
+    ...HOOKS.flatMap((file) => ['--import', pathToFileURL(file).href]),
+    entry,
+    // 换成绕行入口之后版本目录就不在 argv 里了，而它要靠 bin.js 当锚点解析出 dsh 包，
+    // 所以把 bin.js 当第一个参数递过去（普通 profile 走的是官方入口，不需要）
+    ...(entry === RESERVED_BOOT ? [binPath(version)] : []),
+    ...extra,
+  ]
+}
+
+function spawnDsh(version, extra, profile = '', options = {}) {
+  if (optimizingVersion === version) throw new Error('正在优化此版本的依赖，请稍后再试')
+  const home = homeDir()
+  // 先把 dsh 的命令行入口写出来（PATH 里要用到），再拼参数
+  writeDshShims(version)
+  // 用户开了「加到系统 PATH」的话，稳定目录里那份也跟着当前版本走
+  if (SYSTEM_PATH) writeDshShims(version, { dir: systemBinDir() })
+  // 统一用 RUNTIME_NODE 拉起 dsh（打包后就是 Electron 自带的 Node，见 platform.js）；#61 的诊断
+  // 上下文仍要在这之前建好 env。
+  const env = { ...dshEnv(version, options), ...options.instanceLink?.env }
+  if (options.instanceLink) {
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require ${nodeOptionsPath(join(ROOT, 'compat', 'instance-link.cjs'))}`].join(' ')
+  }
+  // 启动 CPU 账本：只有真正拉起实例（bootOnce）时才写报告，插件命令 / 修复命令不写，
+  // 否则会用一次半截运行覆盖掉上一次正常启动的样本。报告按「版本@profile」落盘。
+  if (options.pluginProfile) {
+    env.DSH_X_PLUGIN_PROFILE = `${version}@${profile || PROFILE_NAME}`
+    env.DSH_X_PLUGIN_PROFILE_DIR = join(APP_DIR, 'plugin-profile')
+  }
+  if (options.diagnosticContext) {
+    env.DSH_X_DIAGNOSTIC_ATTEMPT = options.diagnosticContext.attemptId
+    // 取本次实际传入的入口和环境存在性，不扫描另一套安装，也不记录变量值。
+    Object.assign(options.diagnosticContext, {
+      version,
+      profile,
+      entry: bootEntry(version, profile),
+      harnessEntry: env.DSH_BIN,
+      clientVersionPresent: Boolean(env.DSH_CLIENT_VERSION),
+    })
+  }
+  return spawn(RUNTIME_NODE, dshArgs(version, extra, profile), {
+    // 子进程固定落在 DSH_HOME 里：dsh 的默认工作目录就是 process.cwd()，新会话因此在用户目录下；
+    // 插件命令、修复脚本也都靠这个 cwd，DSH_HOME 本身不受它影响。
+    cwd: home,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+}
+
+async function ensureProfileNpmrc(profile = PROFILE_NAME) {
+  const dir = join(homeDir(), 'profiles', profile)
+  await mkdir(dir, { recursive: true })
+  const file = join(dir, '.npmrc')
+  let text = ''
+  try {
+    text = await readFile(file, 'utf8')
+  } catch {
+    text = ''
+  }
+  const missing = []
+  if (!/(^|\n)ignore-workspace-root-check\s*=/.test(text)) missing.push('ignore-workspace-root-check=true')
+  // dsh 自己的 profile 模板把 autoInstallPeers: false 写在 pnpm-workspace.yaml 里，
+  // 但那只对 pnpm 10.6+ 生效；机器上更老的 pnpm（8/9，多半还是系统那份，见
+  // orderRuntimePaths）只读 .npmrc。一旦 pnpm
+  // 自动装 peer，它会把所有插件对同一 @deepseek-ai/* 的 peer 区间求交，而求交库里
+  // 的 stripSemVerPrerelease 会把预发布号删掉——^0.1.0-rc.8 ∩ ^0.1.2-rc.1 变成
+  // `>=0.1.2 <0.2.0-0`，可这些包在 registry 上只有预发布版，于是整个安装在
+  // ERR_PNPM_NO_MATCHING_VERSION 上硬失败。补这一行就等于替老 pnpm 认下 dsh 的本意。
+  if (!/(^|\n)auto-install-peers\s*=/.test(text)) missing.push('auto-install-peers=false')
+  if (!missing.length) return
+  const head = text && !text.endsWith('\n') ? `${text}\n` : text
+  await writeFile(file, `${head}${missing.join('\n')}\n`)
+}
+
+async function fetchRemote({ force = false } = {}) {
+  if (!force && remoteCache.data && Date.now() - remoteCache.at < 60_000) return remoteCache.data
+  const info = await listPackage(PKG, { force })
+  const data = {
+    package: PKG,
+    source: 'https://github.com/deepseek-ai/deepseek-harness',
+    tags: info.tags,
+    versions: info.versions,
+    // 远端最高的版本，只给版本列表打「最新」角标；按版本类型的选择和提醒走 channelPlans
+    latest: latestRemoteFor({ tags: info.tags, versions: info.versions }),
+  }
+  const fresh = remoteCache.data?.versions?.join() !== data.versions.join()
+  remoteCache = { at: Date.now(), data }
+  // 已发布的版本变了，各类型的退档和「新版本」可能跟着变：推一次状态，开着的页面不用等下一次推送
+  if (fresh) void emitState().catch(() => {})
+  return data
+}
+
+function stripTag(tag) {
+  return String(tag || '').trim().replace(/^v/i, '')
+}
+
+async function checkSelfUpdate({ force = false } = {}) {
+  const current = APP_VERSION
+  const url = `https://github.com/${APP_REPO}/releases/latest/download/${APP_SETUP}`
+  const fallback = { current, latest: null, update: false, url }
+  // npm 版：CLI 和核心都走 npm，不提示完整安装包
+  if (NPM_MODE) return { ...fallback, npm: true }
+  // 拆包后的核心：完整安装包的自更新归外壳（electron-updater），这里不再查 GitHub
+  if (process.env.DSH_CORE === '1') return { ...fallback, shell: true }
+  if (!force && selfCache.data && Date.now() - selfCache.at < 30 * 60 * 1000) return selfCache.data
+  try {
+    const latest = await fetchLatestTag()
+    if (!latest) {
+      // 连不上 GitHub 时别一声不吭：用户会以为「一直没有新版本」
+      if (UPDATE_SOURCE !== 'mirror') {
+        pushLog(`[更新] 检查更新失败（连不上 GitHub）；设置页可把「下载源」改成「镜像源」再试${proxyHint()}`)
+      } else {
+        pushLog('[更新] 检查更新失败：直连和加速镜像都没取到版本号')
+      }
+      return fallback
+    }
+    const cur = parseVer(current)
+    const next = parseVer(latest)
+    const update = Boolean(cur && next && cmpVer(next, cur) > 0)
+    const data = { current, latest, update, url }
+    selfCache = { at: Date.now(), data }
+    return data
+  } catch {
+    return fallback
+  }
+}
+
+/** 核心（app 层）更新：npm 元数据缓存与暂存状态（见 core-npm.js 与 apply-update.mjs）。 */
+let stagedApp = null
+let pendingAppUpdate = null
+let appUpdateCache = { at: 0, data: null }
+/** 下载可能被连点或两个标签页同时发起：并到同一份，应用只允许开一次（换了目录进程就退出了）。 */
+let appDownloadInFlight = null
+let appApplyStarted = false
+/** 完整安装包自更新的测试通道：DSH_UPDATE_VERSION 当最新版本。 */
+const TEST_UPDATE_VERSION = String(process.env.DSH_UPDATE_VERSION || '').trim().replace(/^v/i, '')
+const APP_UPDATE_CACHE_MS = 30 * 60 * 1000
+
+/** 下载核心增量包到暂存目录（自动更新与页面共用；并发由 appDownloadInFlight 合并）。 */
+async function downloadAppUpdate() {
+  const data = await checkAppUpdate({ force: true })
+  if (!data.available) {
+    throw new Error(data.reason === 'electron' ? 'Electron 版本不同，需要完整安装包' : '当前没有可用的核心更新')
+  }
+  if (stagedApp && stagedApp.version === data.version && stagingExists(stagedApp.dir)) {
+    return { ok: true, version: stagedApp.version, reused: true }
+  }
+  const tarball = join(tmpdir(), `DSH-X-core-${data.version}-${process.pid}.tgz`)
+  const result = await downloadCoreTarball(pendingAppUpdate.tarball, tarball, {
+    integrity: pendingAppUpdate.integrity,
+    shasum: pendingAppUpdate.shasum,
+    onProgress: ({ done, total }) => emit('selfUpdate', { phase: 'download', kind: 'app', done, total }),
+  })
+  const staging = join(tmpdir(), `DSH-X-core-${data.version}-${process.pid}`)
+  try {
+    const pkg = extractCoreTarball(tarball, staging)
+    if (String(pkg.version) !== String(data.version)) throw new Error(`核心包版本不一致：${pkg.version} != ${data.version}`)
+  } finally {
+    rmSync(tarball, { force: true })
+  }
+  stagedApp = { version: data.version, dir: staging }
+  pushLog(`核心更新已就绪：${data.version}（${(result.bytes / 1048576).toFixed(1)} MB），等用户确认后替换`)
+  emit('selfUpdate', { phase: 'app-ready', latest: data.version })
+  return { ok: true, version: data.version }
+}
+
+/**
+ * 换上暂存的核心并重启外壳。调用前由路由确认过「只开一次」；成功时进程很快会退出，
+ * 所以返回值只是给调用方一个响应。
+ */
+async function applyAppUpdate() {
+  if (!stagedApp || !stagingExists(stagedApp.dir)) throw new Error('还没有下载好的应用更新')
+  const stats = stagingStats(stagedApp.dir)
+  if (stats.files < 100) throw new Error('暂存目录不完整，重新下载一次')
+  const activeCore = join(APP_DIR, 'core', 'current')
+  if (fileManager.samePath(ROOT, activeCore)) {
+    // 已经在用户目录：助手等外壳退出 → 备份 → 换入 → 重启 → 等 update-ok，失败回滚
+    const helper = join(tmpdir(), `dsh-x-apply-${process.pid}-${randomBytes(4).toString('hex')}.mjs`)
+    copyFileSync(join(ROOT, 'apply-update.mjs'), helper)
+    const child = spawn(RUNTIME_NODE, [helper,
+      '--app', ROOT,
+      '--staged', stagedApp.dir,
+      // AppImage 的 process.execPath 是挂载目录里的临时二进制，重启要用 APPIMAGE 本身
+      '--exe', process.env.APPIMAGE || process.execPath,
+      '--pid', String(process.pid),
+      '--backup', `${ROOT}.bak-${APP_VERSION}`,
+      '--marker', join(APP_DIR, 'update-ok'),
+      '--log', join(APP_DIR, 'update.log'),
+    ], {
+      cwd: tmpdir(),
+      env: { ...process.env, ...RUNTIME_NODE_ENV },
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    pushLog(`核心更新：替换助手已启动（${stagedApp.version}），启动器即将退出`)
+    setTimeout(() => shutdown().finally(() => host.exit(0)), 200)
+    return { ok: true, version: stagedApp.version }
+  }
+  // 核心不在用户目录（源码运行 / 旧布局）：复制到 core/current，写 pending 标记；
+  // 外壳下次启动优先加载 current，起不来（外壳里的 recoverCore）会删掉它并回滚/重新下载
+  const pending = join(APP_DIR, 'core', 'pending')
+  const version = stagedApp.version
+  const stagedDir = stagedApp.dir
+  await rm(activeCore, { recursive: true, force: true })
+  await mkdir(dirname(activeCore), { recursive: true })
+  await cp(stagedDir, activeCore, { recursive: true })
+  stagedApp = null
+  try { rmSync(stagedDir, { recursive: true, force: true }) } catch { /* 临时目录清不掉不影响 */ }
+  writeFileSync(pending, JSON.stringify({ version, at: Date.now() }))
+  pushLog(`核心更新：已复制到 ${activeCore}（${version}），重启外壳`)
+  // 不能直接 spawn DSH.exe：当前进程还占着单实例锁，新进程会立刻退出。
+  // 外壳的 host.relaunch 用 app.relaunch()，等本进程退出后才拉起新外壳。
+  setTimeout(() => shutdown().finally(() => {
+    if (typeof host.relaunch === 'function') host.relaunch()
+    else host.exit(0)
+  }), 200)
+  return { ok: true, version }
+}
+
+/** 安装器建的两个快捷方式（用户取消勾选时可能不存在）。 */
+function shortcutLinks() {
+  const links = []
+  if (process.env.USERPROFILE) links.push(join(process.env.USERPROFILE, 'Desktop', 'DSH-X.lnk'))
+  if (process.env.APPDATA) links.push(join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'DSH-X.lnk'))
+  return links.filter((path) => existsSync(path))
+}
+
+/** 用 WScript.Shell 把若干 .lnk 的图标指到 iconTarget。没有快捷方式就直接返回。 */
+export async function setShortcutIcon(links, iconTarget) {
+  if (!links.length) return
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`
+  const script = links
+    .map((link) => `$p=${quote(link)}; $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); $s.IconLocation=${quote(`${iconTarget},0`)}; $s.Save()`)
+    .join('; ')
+  await execFileAsync('powershell', ['-NoProfile', '-Command', script], { windowsHide: true, timeout: 15000 })
+}
+
+/**
+ * 版本更新后刷新桌面 / 开始菜单快捷方式的图标。
+ * 图标文件名带版本号（为绕开 Explorer 图标缓存），快捷方式却还指着旧文件；这里把当前版本的图标
+ * 放进安装根目录的 assets/，再把两个 .lnk 指过去。每个版本只做一次（APP_DIR 里记个戳）。
+ * app 增量只换 resources/app，安装根目录的图标还是安装时那份，所以要在这里补。
+ */
+export async function refreshShortcuts({ installRoot, appDir = APP_DIR, version = APP_VERSION, links, force = false } = {}) {
+  if (!IS_WINDOWS || (!PACKAGED && !force)) return false
+  // 打包布局：<安装根>/resources/app
+  const root = installRoot || dirname(dirname(ROOT))
+  if (!root) return false
+  const stampFile = join(appDir, 'shortcut-icon')
+  try {
+    if (readFileSync(stampFile, 'utf8').trim() === version) return false
+  } catch { /* 还没有戳 */ }
+  const iconSource = join(ROOT, 'assets', 'dsh.ico')
+  if (!existsSync(iconSource)) return false
+  const iconTarget = join(root, 'assets', `dsh-${version}.ico`)
+  try {
+    mkdirSync(join(root, 'assets'), { recursive: true })
+    if (!existsSync(iconTarget)) copyFileSync(iconSource, iconTarget)
+  } catch (error) {
+    pushLog(`快捷方式图标写入失败：${error?.message || error}`)
+    return false
+  }
+  try {
+    await setShortcutIcon(links || shortcutLinks(), iconTarget)
+  } catch (error) {
+    pushLog(`快捷方式图标刷新失败：${error?.message || error}`)
+    return false
+  }
+  // 旧版本的图标文件已经没人引用了，顺手清掉（清不掉不影响）
+  try {
+    for (const file of readdirSync(join(root, 'assets'))) {
+      if (file !== basename(iconTarget) && /^dsh-[\d.]+\.ico$/i.test(file)) rmSync(join(root, 'assets', file), { force: true })
+    }
+  } catch { /* ignore */ }
+  try { writeFileSync(stampFile, version) } catch { /* 记不上就下次再做 */ }
+  return true
+}
+
+/**
+ * 检查核心更新：核心是 npm 上的跨平台 dsh-x-remote-core，按核心版本所在通道查 dist-tags。
+ * 外壳/Electron 不在核心更新范围内（那是 electron-updater 的事）；Electron 版本不同时
+ * 只提示更新外壳。核心目录在用户目录里，不在签名的 .app 内，mac 也不需要重签。
+ */
+async function checkAppUpdate({ force = false } = {}) {
+  if (NPM_MODE) return { available: false, reason: 'npm' }
+  if (!PACKAGED || (!IS_WINDOWS && !IS_MAC && !IS_LINUX)) return { available: false, reason: PACKAGED ? 'platform' : 'source' }
+  if (!force && appUpdateCache.data && Date.now() - appUpdateCache.at < APP_UPDATE_CACHE_MS) return appUpdateCache.data
+  const remember = (data) => { appUpdateCache = { at: Date.now(), data }; return data }
+  const latest = APP_VERSION
+  let result
+  try {
+    // 通道跟着当前版本走（正式版只收正式版，rc 版收 rc / alpha），没有单独的通道开关。
+    result = await checkCoreUpdate({
+      current: APP_VERSION,
+      source: UPDATE_SOURCE,
+      channel: versionChannel(APP_VERSION) || VERSION_CHANNEL.OFFICIAL,
+    })
+  } catch (error) {
+    return remember({ available: false, reason: 'manifest', latest, error: error?.message || String(error) })
+  }
+  if (!result.available) return remember({ available: false, reason: 'current', latest: result.latest || latest })
+  const release = result.release
+  // 核心包声明它按哪个 Electron 版本构建；不一致就走完整安装包
+  if (release.electron && release.electron !== String(process.versions.electron)) {
+    return remember({ available: false, reason: 'electron', latest: result.latest, electron: release.electron })
+  }
+  pendingAppUpdate = { version: result.latest, tarball: release.tarball, integrity: release.integrity, shasum: release.shasum }
+  return remember({
+    available: true,
+    latest: result.latest,
+    version: result.latest,
+    // tarball 的实际大小要下载时才知道；页面用「核心包」而不是具体 MB
+    downloadSize: 0,
+  })
+}
+
+async function fetchLatestTag() {
+  if (TEST_UPDATE_VERSION) return TEST_UPDATE_VERSION
+  const apiUrl = `https://api.github.com/repos/${APP_REPO}/releases/latest`
+  const pageUrl = `https://github.com/${APP_REPO}/releases/latest`
+  // 版本检查也走下载源：国内直连 api.github.com 常常超时或撞限流，选了「国内加速」就带镜像前缀
+  for (const url of updateUrlCandidates(apiUrl, UPDATE_SOURCE)) {
+    try {
+      const res = await netFetch(url, {
+        headers: {
+          accept: 'application/vnd.github+json',
+          'user-agent': 'dsh-launcher',
+        },
+      })
+      if (!res.ok) continue
+      const rel = await res.json()
+      const tag = stripTag(rel.tag_name)
+      if (tag) return tag
+    } catch { /* 换下一个候选，最后再退回 HTML */ }
+  }
+  for (const url of updateUrlCandidates(pageUrl, UPDATE_SOURCE)) {
+    try {
+      const page = await netFetch(url, {
+        headers: { 'user-agent': 'dsh-launcher' },
+        redirect: 'follow',
+      })
+      if (!page.ok) continue
+      const match = /\/releases\/tag\/([^/?#]+)/.exec(page.url || '')
+      if (match) return stripTag(decodeURIComponent(match[1]))
+    } catch { /* 继续试下一个 */ }
+  }
+  return null
+}
+
+/**
+ * 远端能给到的最新版。这里按用户的取舍把预发布也算数：装了 rc 的人应该被告知
+ * 更新的 alpha，而不是被“稳定版”的字面口径挡住。只看 latest 标签不够——dsh
+ * 常把新版本挂在 next / alpha 上。`accept` 按版本类型收窄候选（见 channelPlans）。
+ */
+function latestRemoteFor(remote, accept = () => true) {
+  const candidates = []
+  for (const name of ['latest', 'next', 'alpha']) {
+    const tag = typeof remote.tags?.[name] === 'string' ? remote.tags[name].trim() : ''
+    if (tag) candidates.push(tag)
+  }
+  for (const item of remote.versions || []) {
+    if (item) candidates.push(item)
+  }
+  let best = ''
+  let bestParsed = null
+  for (const item of candidates) {
+    const parsed = parseVer(item)
+    if (!parsed || !accept(item)) continue
+    if (!bestParsed || cmpVer(parsed, bestParsed) > 0) {
+      best = item
+      bestParsed = parsed
+    }
+  }
+  return best
+}
+
+/** 更高才算更新；相等或更低都不打扰。 */
+function isNewer(latest, current) {
+  const next = parseVer(latest)
+  const cur = parseVer(current)
+  return Boolean(next && cur && cmpVer(next, cur) > 0)
+}
+
+/**
+ * 检测与启动时共用通道计划，不能让只跟正式版的启动项被 Alpha 更新打扰。
+ * 远端最高版本仍单独返回给安装列表；启动器更新只读缓存，GitHub 慢时不拖住 dsh 检测。
+ */
+async function checkVersionUpdates({ force = false } = {}) {
+  const remote = await fetchRemote({ force })
+  const installed = listedVersions(await loadConfig())
+  const stored = await loadSettings()
+  const plan = followedUpdatePlans(installed, safeLaunchPresets(stored.launchPresets))[0]
+  const current = plan.installed[0] || ''
+  return {
+    checkedAt: new Date().toISOString(),
+    installed,
+    current,
+    latest: remote.latest || '',
+    updateLatest: plan.latest,
+    channel: plan.channel,
+    update: isNewer(plan.latest, current),
+    tags: remote.tags,
+    versions: remote.versions,
+    self: selfCache.data,
+  }
+}
+
+/**
+ * 各启动项所跟通道分别比较自己的已装版本；不能让已最新的 Alpha 遮住正式版更新。
+ * 标量接口仍返回一个代表计划：有更新时取最新候选，无更新时沿用最宽通道。
+ */
+function followedUpdatePlans(installed, presets) {
+  const followed = new Set(presets.map((entry) => safeUpdateChannel(entry.updateChannel)))
+  if (!followed.size) {
+    followed.add(DEFAULT_UPDATE_CHANNEL)
+  }
+  const plans = channelPlans(installed)
+  const selected = VERSION_CHANNELS.filter((channel) => followed.has(channel)).reverse().map((channel) => plans[channel])
+  const updates = selected.filter((plan) => isNewer(plan.latest, plan.installed[0] || ''))
+  updates.sort((left, right) => cmpVer(parseVer(right.latest), parseVer(left.latest)))
+  return updates.length ? updates : [selected[0]]
+}
+
+/**
+ * 启动时要先问用户的那件事：dsh 本体或启动器自身有新版本。
+ * 有就返回详情（调用方据此跳过自动启动），都最新返回 null。
+ * 用户点过「不更新」的版本记在 settings 里，同一个版本不再问第二次。
+ * 网络失败一律当作「没有更新」，不能因为拉不到远端就把启动卡住。
+ */
+export async function pendingUpdate() {
+  const found = { dsh: null, self: null }
+  let stored = {}
+  try {
+    stored = await loadSettings()
+  } catch { /* 读不到设置就当没跳过、只跟正式版 */ }
+  const skipped = stored.skippedUpdate || {}
+  try {
+    await fetchRemote()
+    // 跟「自动最新版本」比：同一类型里已装的最高版本才是自动项在用的，类型以外的版本（比如装着的
+    // 更高的 Alpha）不能拿来比，否则只选正式版的人会因为它被挡掉正式版的更新提示
+    const plans = followedUpdatePlans(listedVersions(await loadConfig()), safeLaunchPresets(stored.launchPresets))
+    for (const plan of plans) {
+      const current = plan.installed[0] || ''
+      const latest = plan.latest
+      if (isNewer(latest, current) && skipped.dsh !== latest) {
+        found.dsh = { current, latest }
+        break
+      }
+    }
+  } catch { /* 拉不到远端就当没更新 */ }
+  try {
+    const self = await checkSelfUpdate()
+    if (self.update && skipped.self !== self.latest) {
+      found.self = { current: self.current, latest: self.latest, url: self.url }
+    }
+  } catch { /* 同上 */ }
+  return found.dsh || found.self ? found : null
+}
+
+/**
+ * 记住用户点过「不更新」的版本，下次启动不再拿同一个版本打扰。
+ * 只收合法版本号，其余一律丢掉，免得把设置文件写脏。
+ */
+async function skipPendingUpdate(patch) {
+  const saved = (await loadSettings()).skippedUpdate || {}
+  const next = { ...saved }
+  for (const key of ['dsh', 'self']) {
+    const version = typeof patch?.[key] === 'string' ? patch[key].trim() : ''
+    if (version && VERSION_RE.test(version)) next[key] = version
+  }
+  await saveSettings({ skippedUpdate: next })
+  return { skippedUpdate: next }
+}
+
+const RELEASE_FEEDS = {
+  dsh: 'https://github.com/deepseek-ai/deepseek-harness/releases.atom',
+  self: `https://github.com/${APP_REPO}/releases.atom`,
+}
+const FEED_TTL_MS = 30 * 60 * 1000
+const RELEASE_VERSION_RE = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/
+const feedCache = new Map()
+
+function decodeEntities(text) {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+}
+
+/**
+ * 把 release 正文的 HTML 折成 {type, text} 块。只认标题/段落/列表项，
+ * 其余标签一律剥掉——远端 HTML 绝不能直接进页面。
+ */
+function parseNotes(html) {
+  const text = decodeEntities(html)
+    .replace(/<\/?(?:ul|ol)\b[^>]*>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+  const blocks = []
+  const re = /<(h[1-6]|p|li)\b[^>]*>([\s\S]*?)<\/\1>/gi
+  let match
+  while ((match = re.exec(text))) {
+    const body = decodeEntities(match[2].replace(/<[^>]+>/g, ' '))
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!body) continue
+    const tag = match[1].toLowerCase()
+    blocks.push({ type: tag === 'li' ? 'li' : tag[0] === 'h' ? 'h' : 'p', text: body })
+  }
+  return blocks
+}
+
+/** 拉某个仓库的 release 列表（缓存半小时）。atom 不走 API，不会撞未认证限流。 */
+async function releaseFeed(kind) {
+  const url = RELEASE_FEEDS[kind]
+  if (!url) return []
+  const hit = feedCache.get(kind)
+  if (hit && Date.now() - hit.at < FEED_TTL_MS) return hit.entries
+  const res = await netFetch(url, { headers: { 'user-agent': 'dsh-launcher' } })
+  if (!res.ok) throw new Error(`release feed ${res.status}`)
+  const xml = await res.text()
+  const entries = []
+  for (const item of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const body = item[1]
+    const title = decodeEntities((/<title>([\s\S]*?)<\/title>/.exec(body) || [])[1] || '').trim()
+    const href = (/<link[^>]*rel="alternate"[^>]*href="([^"]+)"/i.exec(body) || [])[1] || ''
+    const updated = (/<updated>([\s\S]*?)<\/updated>/.exec(body) || [])[1] || ''
+    const content = (/<content[^>]*>([\s\S]*?)<\/content>/.exec(body) || [])[1] || ''
+    // 版本号从标题和 tag 各取一次：dsh 是 v0.1.6-alpha.2 / dsh-v0.1.6-alpha.2，启动器是「DSH启动器 v0.1.5」
+    const version = (RELEASE_VERSION_RE.exec(title) || RELEASE_VERSION_RE.exec(href) || [])[0] || ''
+    if (!version) continue
+    entries.push({ version, title, url: href, updated, content })
+  }
+  feedCache.set(kind, { at: Date.now(), entries })
+  return entries
+}
+
+/**
+ * 某个版本的更新内容。dsh 的正文是中英双语，只留中文那段；
+ * 拿不到（版本比 feed 还老）就回 url 让调用方引导去看 release 页。
+ */
+async function releaseNotes(kind, version) {
+  const wanted = String(version || '').trim()
+  const fallbackUrl = RELEASE_FEEDS[kind] ? RELEASE_FEEDS[kind].replace(/\.atom$/, '') : ''
+  if (!RELEASE_FEEDS[kind] || !wanted) return { found: false, url: fallbackUrl }
+  let entries = []
+  try {
+    entries = await releaseFeed(kind)
+  } catch {
+    return { found: false, url: fallbackUrl }
+  }
+  const entry = entries.find((item) => item.version === wanted)
+  if (!entry) return { found: false, url: fallbackUrl }
+  const raw = decodeEntities(entry.content)
+  // 英文段的锚点写法变过：老正文是 `id="en-v0.1.18"`，现在是 `<a id="en">`，
+  // 经 GitHub 渲染后都带 `user-content-` 前缀。只认 `en-v` 会把整段英文留在弹窗里。
+  const englishAt = raw.search(/id="(?:[^"]*-)?en(?:-[^"]*)?"/i)
+  // 正文开头那行「中文 | English」是语言导航，不是变更内容
+  const blocks = parseNotes(englishAt > 0 ? raw.slice(0, englishAt) : raw)
+    .filter((block) => !/^(?:中文|English)(?:\s*\|\s*(?:中文|English))+$/i.test(block.text))
+  return {
+    found: true,
+    version: entry.version,
+    title: entry.title,
+    url: entry.url,
+    updated: entry.updated,
+    blocks,
+  }
+}
+
+/** 兼容检查的拒绝不是 pnpm 故障；保留原因，别引导用户绕过检查强装。 */
+export function describePluginFailure(output, label, code) {
+  const text = String(output || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+  if (/\bpnpm(?:\.cmd)?['"]?\s+(?:was not found|is not recognized|不是内部|�)/i.test(text)) {
+    return '找不到 pnpm，插件尚未更新。请安装 pnpm 并加入 PATH，或使用完整 DSH-X 安装包，然后重启启动器。'
+  }
+  const incompatible = text.match(/Plugin\s+(\S+)\s+is incompatible with dsh\s+([^\s:]+):\s*peerDependencies\s*(\{[\s\S]*?\})/i)
+  if (incompatible) {
+    let required = []
+    try {
+      const peers = JSON.parse(incompatible[3])
+      required = [...new Set(Object.entries(peers).filter(([name]) => name.startsWith('@deepseek-ai/')).map(([, spec]) => String(spec)))]
+    } catch { /* 声明格式变化时仍显示拒绝原因，不退回只有退出码。 */ }
+    return `${incompatible[1]} 与当前使用的 DSH ${incompatible[2]} 不兼容。\n${required.length ? `插件要求的 DSH 组件版本：${required.join('、')}。\n` : ''}请先在版本管理中安装兼容的 DSH；如果此 Profile 正在运行旧版，请停止旧版后再更新插件。`
+  }
+  const npmReason = describeNpmFailure(text)
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const reasons = lines.filter((line) => /ERR_PNPM_|\bdsh:\s*(?:error|installation rejected|failed|cannot|could not)|\b(?:Error|EACCES|EPERM|ENOSPC|ECONNRESET|ETIMEDOUT|ENOTFOUND)\b/i.test(line))
+    .filter((line) => !/plugin command failed; diagnostics:|nothing was installed|to accept the risk|--accept-risk/i.test(line))
+  const reason = (npmReason || reasons.slice(0, 3).join('\n') || lines.filter((line) => !/plugin command failed; diagnostics:|nothing was installed|--accept-risk|^Progress:/i.test(line)).slice(-3).join('\n')).slice(0, 3000)
+  return reason ? `${label} 失败\n${reason}` : `${label} 失败（退出码 ${code}，命令未提供具体原因；请查看日志）`
+}
+
+/** 同一条子进程流可能混有 Node 的 UTF-8 和 cmd 的 GBK；逐行辨认，保留原始中文原因。 */
+export function decodeProcessOutput(bytes, platform = process.platform) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
+  catch { return platform === 'win32' ? new TextDecoder('gb18030').decode(bytes) : Buffer.from(bytes).toString('utf8') }
+}
+
+/**
+ * 跑一条 `dsh plugin …`（透传给 pnpm），输出进日志。
+ * profile 与进度出口都能换：整合包安装也跑在目标 profile 上，进度分到整合包页。
+ */
+async function runPluginCommand(ver, args, label, options = {}) {
+  if (optimizingVersion === ver) throw new Error('正在优化此版本的依赖，请稍后再试')
+  const profile = options.profile || PROFILE_NAME
+  const onProgress = options.onProgress || emitPluginProgress
+  // 保留名（desktop）：CLI 会拒，改用同一份目录的别名（见 ensureProfileAlias）
+  const cliProfile = !options.lockedDiagnosticTarget && CLI_BLOCKED_PROFILES.has(profile.toLowerCase()) ? ensureProfileAlias(profile) : ''
+  // 先按这份 profile 记的 store 挑 pnpm（#12）：挑得出来就用它，挑不出来按老规矩「系统优先」
+  const pnpmDir = await preferredPnpmDir(profile).catch(() => '')
+  pushLog(`插件命令使用 DSH ${ver} · profile ${profile}`)
+  return new Promise((resolve, reject) => {
+    const target = options.lockedDiagnosticTarget
+    if (target && (homeDir() !== target.home || target.profile !== profile || target.version !== ver || binPath(ver) !== target.harnessEntry || args.length !== 2 || args[0] !== 'remove')) {
+      reject(new Error('诊断卸载的目标身份不一致。'))
+      return
+    }
+    const child = target
+      ? spawn(process.execPath, [join(ROOT, 'repair-uninstall.mjs'), target.harnessEntry, target.home, profile, args[1]], { cwd: profileDirOf(profile), env: dshEnv(ver, { pnpmDir }), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      : spawnDsh(ver, ['plugin', '--profile', cliProfile || profile, ...args], '', { pnpmDir })
+    // 留一份输出尾巴挂在错误上：只报退出码的话调用方没法判断是哪种失败，只能瞎猜着重试
+    const tail = []
+    // 兼容拒绝常在输出开头；尾部可能只剩诊断文件路径，另留有界的首段用于解释原因。
+    let diagnostics = ''
+    // pnpm 的进度：装插件可能几十秒，页面要有条能动的进度条，别只留一句「正在更新…」
+    const progressState = { resolved: 0, reused: 0, downloaded: 0, added: 0, total: 0 }
+    const keepLine = (line) => {
+      const text = redact(line, secretValues)
+      if (!text.trim()) return
+      if (diagnostics.length < 64 * 1024) diagnostics += `${text}\n`.slice(0, 64 * 1024 - diagnostics.length)
+      tail.push(text)
+      if (tail.length > 40) tail.shift()
+      pushLog(`[plugin] ${text}`)
+      const progress = parsePnpmProgress(text, progressState)
+      if (progress) onProgress(progress)
+    }
+    // 两条流按字节拼完整行后再解码；Windows cmd 的本地编码不能直接当 UTF-8 读。
+    const pending = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+    for (const name of ['stdout', 'stderr']) {
+      child[name].on('data', (chunk) => {
+        const bytes = Buffer.concat([pending[name], chunk])
+        let start = 0
+        for (let i = 0; i < bytes.length; i += 1) {
+          if (bytes[i] !== 10 && bytes[i] !== 13) continue
+          keepLine(decodeProcessOutput(bytes.subarray(start, i)))
+          start = i + 1
+        }
+        pending[name] = bytes.subarray(start)
+      })
+    }
+    child.on('error', reject)
+    child.on('close', (code) => {
+      for (const line of Object.values(pending)) keepLine(decodeProcessOutput(line))
+      if (code === 0) resolve()
+      else {
+        const describeFailure = target ? describeDiagnosticCommandFailure : describePluginFailure
+        const error = new Error(describeFailure(`${diagnostics}\n${tail.join('\n')}`, label, code))
+        error.tail = tail.slice(-40)
+        reject(error)
+      }
+    })
+  })
+}
+
+/**
+ * 这个失败像是 pnpm 装 peer 撞出来的吗——只有这类才值得换掉 auto-install-peers 重试。
+ * 插件声明的 @deepseek-ai/* peer 在 registry 上只有预发布版，pnpm 自动装 peer 会求交
+ * 失败或 404。
+ */
+function looksLikePeerFailure(text) {
+  if (/installation rejected|incompatible with dsh|与当前使用的 DSH .*不兼容/i.test(String(text || ''))) return false
+  return /ERR_PNPM_NO_MATCHING_VERSION|ERR_PNPM_PEER_DEP|auto-install-peers|peer dep|no matching version|404 Not Found/i.test(String(text || ''))
+}
+
+/**
+ * 清掉 node_modules 里悬空的链接（断链），返回清掉的数量。
+ *
+ * Windows 上 pnpm 用 junction 把 node_modules 里的包指到 .pnpm，dsh 的模块回退也建成
+ * junction。目标被删过之后（pnpm 存库清理、外部工具、同步软件）这些链接就悬空了：打开
+ * 它会返回一个 libuv 认不出的 Win32 错误码——用户看到的就是 pnpm 报告安装成功、紧接着
+ * "UNKNOWN: unknown error, open .../dshmarket/package.json"，退出码 -4094（UV_UNKNOWN）。
+ *
+ * 悬空的链接没有任何用处，摘掉它下次安装会重新建。注意只摘链接本身，不动目标。
+ */
+/**
+ * 失败像是「这台机器读不了 junction」吗。
+ *
+ * 有用户的机器上 pnpm 报告装完了、却在回读自己刚建的 junction 时崩掉，报
+ * `UNKNOWN: unknown error, open ...node_modules\<pkg>\package.json`，退出码 -4094
+ * （libuv 的 UV_UNKNOWN，意思是碰到了一个它没有映射的 Win32 错误码）。那台机器上连
+ * 用两个普通真实目录新建的 junction 都读不了——不是链接悬空，是链接根本没法被跟随。
+ */
+function looksLikeLinkFailure(text) {
+  return /unknown error/i.test(String(text || '')) && /node_modules/i.test(String(text || ''))
+}
+
+/**
+ * 让 pnpm 彻底不用链接：包平铺成真实目录、从存库复制而不是硬链。
+ *
+ * 这是上面那种机器唯一走得通的路（符号链接要管理员权限或开发者模式，junction 又读不了，
+ * 没有第三种链接类型可用）。只在真撞上这个问题时才写，别去动本来正常的机器。
+ * .npmrc 不在插件管理器的跟踪范围内，不会被它覆盖。
+ */
+async function useHoistedLinker(profile = PROFILE_NAME) {
+  const file = join(homeDir(), 'profiles', profile, '.npmrc')
+  let text = ''
+  try {
+    text = await readFile(file, 'utf8')
+  } catch {
+    text = ''
+  }
+  if (/(^|\n)node-linker\s*=/.test(text)) return false
+  const head = text && !text.endsWith('\n') ? `${text}\n` : text
+  await writeFile(file, `${head}node-linker=hoisted\npackage-import-method=copy\n`)
+  return true
+}
+
+function pruneDanglingLinks(dir, depth = 1) {
+  let removed = 0
+  let entries = []
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    let isLink = false
+    try {
+      isLink = lstatSync(path).isSymbolicLink()
+    } catch {
+      continue
+    }
+    if (!isLink) {
+      // 带 scope 的包（@local/dsh-preset-advisor 这种）在 scope 目录里，只扫一层会漏掉，
+      // 而悬空的恰恰常出现在那儿：dsh 报 cannot resolve 的正是它们。
+      if (depth > 0 && entry.name.startsWith('@') && entry.isDirectory()) {
+        removed += pruneDanglingLinks(path, depth - 1)
+      }
+      continue
+    }
+    try {
+      statSync(path)          // 能 stat 到说明链接是通的
+      continue
+    } catch {
+      try {
+        unlinkSync(path)
+        removed += 1
+      } catch { /* 摘不掉就算了，别把安装本身搞挂 */ }
+    }
+  }
+  return removed
+}
+
+async function addPlugin(version, spec, { profile = PROFILE_NAME } = {}) {
+  profile = safeProfile(profile)
+  const ver = safeVersion(version)
+  const pkg = safeSpec(spec)
+  if (pluginBusy) throw new Error('正在安装插件')
+  if (!existsSync(binPath(ver))) throw new Error('找不到官方入口 lib/bin.js')
+
+  pluginBusy = true
+  pluginProgressName = pkg
+  pluginProgressProfile = profile
+  emitPluginProgress({ phase: 'resolve' })
+  await mkdir(homeDir(), { recursive: true })
+  await ensureProfileNpmrc(profile)
+  const dir = profileDirOf(profile)
+  // git / 本地目录的 spec 里没有包名，装完只能靠依赖清单的增量认出来。
+  const before = new Set(Object.keys(profileDependencies(dir)))
+  const broken = pruneDanglingLinks(join(dir, 'node_modules'))
+  if (broken) pushLog(`先清理了 ${broken} 个悬空的链接（断链会让安装报 unknown error）`)
+  pushLog(`安装插件 ${pkg} 到 ${profile} profile`)
+  try {
+    try {
+      await runPluginCommand(ver, ['add', '-w', pkg], `dsh plugin add ${pkg}`, { profile })
+    } catch (error) {
+      const text = `${error instanceof Error ? error.message : error}\n${(error?.tail || []).join('\n')}`
+      if (looksLikePeerFailure(text)) {
+        // 插件声明的 @deepseek-ai/* peer 多为运行时注入、registry 上只有 prerelease，
+        // pnpm 自动装 peer 会 404；关掉它重试一次（与插件市场同款做法）
+        pushLog(`${error instanceof Error ? error.message : error}；改用不自动装 peer 重试`)
+        await runPluginCommand(ver, ['add', '-w', pkg, '--config.auto-install-peers=false'], `dsh plugin add ${pkg}`, { profile })
+      } else if (looksLikeLinkFailure(text) && await useHoistedLinker(profile)) {
+        // 这台机器读不了 junction（见 looksLikeLinkFailure 的说明）。让 pnpm 不用任何
+        // 链接重来一次——有用户的机器上正是这两行解决了问题。
+        pushLog('这台机器读不了目录链接，改用真实目录（node-linker=hoisted）重试')
+        const broken = pruneDanglingLinks(join(profileDirOf(profile), 'node_modules'))
+        if (broken) pushLog(`先清理了 ${broken} 个悬空的链接`)
+        await runPluginCommand(ver, ['add', '-w', pkg], `dsh plugin add ${pkg}`, { profile })
+      } else {
+        // 认不出原因就不硬试：装不上就装不上，报出来让人看。
+        // 原样重试没有意义——第一次失败的原因第二次还在，只会把终端刷满。
+        throw error
+      }
+    }
+    // 0.2.x 的 dsh plugin add 是纯 pnpm 透传、不再写挂载清单（0.1.x 会写）：
+    // 启动器接管这一步，不补的话插件在 dsh 里永远是关闭状态。
+    // npm 名能直接取出包名；git / 本地目录只有装完才知道真实包名，所以对比
+    // 安装前后的 dependencies，把新增的那个挂上去。挂载前确认它真是个 bundle，
+    // 别把自动装进来的 peer/普通依赖塞进层栈——那会让 dsh 启动时解析不到 bundle。
+    const guessed = bundleNameOf(pkg)
+    const after = profileDependencies(dir)
+    const targets = guessed
+      ? (Object.hasOwn(after, guessed) ? [guessed] : [])
+      : Object.keys(after).filter((name) => !before.has(name))
+    if (guessed && !targets.length) pushLog(`${guessed} 没有出现在依赖清单里，未写入 dsh.profile.bundles`)
+    for (const name of targets) {
+      if (!packageLooksLikeBundle(dir, name)) {
+        pushLog(`${name} 不是可挂载的 bundle，未写入 dsh.profile.bundles`)
+        continue
+      }
+      const mounted = ensureBundleMounted(dir, name)
+      if (mounted.ok && mounted.changed) pushLog(`已挂载 ${mounted.name}（写入 ${profile} 的 dsh.profile.bundles）`)
+      else if (!mounted.ok) pushLog(`挂载 ${pkg} 没做成：${mounted.reason}`)
+    }
+    if (!guessed && !targets.length) pushLog(`无法从 ${pkg} 判断包名，未自动挂载；插件没生效时请在 dsh 里手动启用`)
+    pushLog(`${pkg} 已在 ${profile} profile`)
+  } finally {
+    pluginBusy = false
+    pluginProgressName = ''
+    pluginProgressProfile = ''
+    invalidateStorageBreakdown()
+    emitPluginProgress(null)
+  }
+}
+
+/**
+ * 从 profile 卸载一个插件包。
+ *
+ * 和官方插件管理器同一套语义：先 `dsh plugin remove`（pnpm 删依赖与文件），
+ * 再从 `dsh.profile.bundles` 摘掉（0.2.x 起层栈只认这份清单，光删依赖会留下
+ * 一个解析不到的 bundle，dsh 下次启动直接失败），最后清掉这个包以前写进
+ * `cordis.patch.yml` 的 `disabled: true`——否则以后重装时插件会莫名其妙地
+ * 保持禁用。补丁清理只碰没有被其它已装插件共用的行。
+ */
+async function removePlugin(version, name, { profile = PROFILE_NAME } = {}) {
+  profile = safeProfile(profile)
+  const ver = safeVersion(version)
+  if (pluginBusy) throw new Error('正在安装或卸载插件')
+  if (!existsSync(binPath(ver))) throw new Error('找不到官方入口 lib/bin.js')
+  const dir = profileDirOf(profile)
+  const ids = packageRowIds(dir, name)
+  pluginBusy = true
+  pluginProgressName = name
+  pluginProgressProfile = profile
+  emitPluginProgress({ phase: 'resolve' })
+  try {
+    pushLog(`从 ${profile} 卸载插件 ${name}`)
+    await runPluginCommand(ver, ['remove', name], `dsh plugin remove ${name}`, { profile })
+    const unmounted = removeBundleMounted(dir, [name])
+    if (!unmounted.ok) pushLog(`未能从 dsh.profile.bundles 摘掉 ${name}（${unmounted.reason || '清单不可写'}）；下次启动可能失败`)
+    // 补丁清理是收尾，写不进去不该把已经完成的卸载报成失败。
+    try {
+      const remaining = new Set(listPlugins(dir).plugins.flatMap((plugin) => plugin.ids))
+      const stale = ids.filter((id) => !remaining.has(id))
+      if (dropRowDisables(dir, stale).changed) pushLog(`已清理 ${name} 留在补丁层的开关记录`)
+    } catch (error) {
+      pushLog(`清理 ${name} 的补丁层开关失败：${error instanceof Error ? error.message : error}`)
+    }
+    pushLog(`${name} 已从 ${profile} 卸载（重启 dsh 后生效）`)
+  } finally {
+    pluginBusy = false
+    pluginProgressName = ''
+    pluginProgressProfile = ''
+    invalidateStorageBreakdown()
+    emitPluginProgress(null)
+  }
+}
+
+// ---- 桌面增强：设置里一键装三个首方插件 ----
+/**
+ * 这个 profile 还缺哪些桌面增强插件。
+ *
+ * 只认 dependencies：装过的（不管 registry / link: / file:）算有，用户在 dsh 插件页
+ * 关掉的也算有——开关状态归 dsh 管，这里只管「装没装」。
+ *
+ * @param {string} profile - profile 名。
+ * @returns {typeof DESKTOP_PLUGINS} 缺的那几个。
+ */
+function desktopEnhanceMissing(profile = PROFILE_NAME) {
+  let manifest = null
+  try {
+    manifest = JSON.parse(readFileSync(join(profileDirOf(profile), 'package.json'), 'utf8'))
+  } catch {
+    return [...DESKTOP_PLUGINS]
+  }
+  const dependencies = manifest?.dependencies && typeof manifest.dependencies === 'object' ? manifest.dependencies : {}
+  return DESKTOP_PLUGINS.filter((plugin) => !Object.hasOwn(dependencies, plugin.name))
+}
+
+/** 桌面增强的安装进度摘要（启动项弹窗用）：装了几个 / 共三个。 */
+function desktopEnhanceSummary(profile = PROFILE_NAME) {
+  return {
+    installed: DESKTOP_PLUGINS.length - desktopEnhanceMissing(profile).length,
+    total: DESKTOP_PLUGINS.length,
+  }
+}
+
+/**
+ * 把缺的桌面增强插件装进 profile。调用方负责把它放进目标 home 的 launchScope 里，
+ * 否则 profileDirOf 会读到启动器自己的 DSH_HOME。
+ *
+ * 单个插件失败只记下来、不往外抛：三个插件互不依赖，一个装不上不该拦住另外两个；
+ * 缺的那个下次保存启动项 / 点安装时还会再试。`version` 由调用方先解析好时传进来，
+ * 省一次版本探测；没传就自己按这个 profile 解析，解析不出来也算这三个都失败。
+ *
+ * @param {string} profile - profile 名。
+ * @param {string} [version] - 已经解析好的 dsh 版本。
+ * @returns {Promise<{installed: string[], failed: {name: string, error: string}[], missing: number}>}
+ */
+async function installDesktopEnhance(profile = PROFILE_NAME, version = '') {
+  const wanted = desktopEnhanceMissing(profile)
+  if (!wanted.length) return { installed: [], failed: [], missing: 0 }
+  let ver = version
+  if (!ver) {
+    try {
+      ver = await pluginCommandVersion(profile)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { installed: [], failed: wanted.map((plugin) => ({ name: plugin.name, error: message })), missing: wanted.length }
+    }
+  }
+  const installed = []
+  const failed = []
+  for (const plugin of wanted) {
+    if (!versionAtLeast(ver, plugin.minDsh)) {
+      failed.push({ name: plugin.name, error: `${plugin.label} 需要 dsh ${plugin.minDsh} 或更高版本` })
+      continue
+    }
+    pushLog(`桌面增强：安装 ${plugin.label}（${plugin.name}）到 ${profile}`)
+    try {
+      await addPlugin(ver, `${plugin.name}@${plugin.spec}`, { profile })
+      installed.push(plugin.name)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failed.push({ name: plugin.name, error: message })
+      pushLog(`桌面增强：${plugin.name} 安装失败：${message}`)
+    }
+  }
+  return { installed, failed, missing: wanted.length }
+}
+
+/**
+ * 官方 DSH 会热加载“已有 bundle 的开关”，但新装依赖是否被宿主进程收进来没有稳定 API。
+ * 桌面增强是用户明确点开的增强包：这里做可感知的热切换——安装完成后立刻停止旧进程并
+ * 拉起同一 version/profile。对用户来说是保存即生效，不需要再回首页手动重启。
+ */
+async function activateDesktopEnhance(profile, installResult) {
+  if (!installResult?.installed?.length) return { reloaded: false, url: '', error: '' }
+  const live = liveInstanceList()
+    .filter((proc) => proc.profile === profile && proc.home === homeDir() && proc.status === 'running')
+    .at(-1)
+  if (!live) return { reloaded: false, url: '', error: '' }
+  pushLog(`桌面增强：${profile} 已更新，正在热切换 ${live.version}/${profile}…`)
+  try {
+    await stop(live.version, profile)
+    const restarted = await start(live.version, profile)
+    pushLog(`桌面增强：${profile} 热切换完成`)
+    return { reloaded: true, url: restarted.url, error: '' }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    pushLog(`桌面增强热切换失败：${message}`)
+    return { reloaded: false, url: '', error: message }
+  }
+}
+
+// ---- 插件更新：查 registry 上的最新版本，按需升级 profile 里的包 ----
+// 升级复用 addPlugin（peer 404、目录链接读不了这两套回退都在里面），装和升走同一条路。
+const pluginUpdateCache = { at: 0, data: null, profile: '' }
+const PLUGIN_UPDATE_TTL = 60 * 1000
+const PLUGIN_UPDATE_CONCURRENCY = 4
+
+/** 固定内核跟随目标启动项；只有 auto 或未绑定的 Profile 才按运行版本、最高已装版本选择。 */
+async function pluginCommandVersion(profile = PROFILE_NAME) {
+  const config = await loadConfig()
+  const presets = safeLaunchPresets(loadSettingsSync().launchPresets)
+    .filter((entry) => entry.profile === profile && (entry.dshHome || defaultHome()) === homeDir())
+  const selected = presets.find((entry) => entry.id === launchScope.getStore()?.launchId)
+  const available = (version) => {
+    if (!version) throw new Error('没有可用的 dsh 版本，插件页暂时用不了')
+    // 固定版本缺失时不能偷偷换内核，否则兼容检查和实际启动检查的就不是同一套组件。
+    if (!existsSync(binPath(version))) throw new Error(`DSH ${version} 未安装，请先在版本管理中安装，或修改启动项的内核版本`)
+    return version
+  }
+  if (selected) return available(resolvePresetVersion(selected, homeDir(), config))
+
+  // 设置页只有目录与 Profile，没有启动项 ID；仍优先沿用正在运行的环境。
+  const live = liveInstanceList().filter((proc) => proc.profile === profile && proc.home === homeDir())
+    .sort((a, b) => cmpVer(parseVer(b.version), parseVer(a.version)))[0]
+  if (live?.version) return available(live.version)
+  const versions = [...new Set(presets.map((entry) => resolvePresetVersion(entry, homeDir(), config)))]
+  // 同一个目录/Profile 可以绑定多个内核，不能靠启动项排列顺序猜用户要更新哪一套。
+  if (versions.length > 1) throw new Error(`profile「${profile}」对应多个内核版本，请从要使用的启动项进入插件管理后再更新`)
+  // 绑定的通道没有可用内核时照样报错；空串不能掉进未绑定 Profile 的兜底，绕到其他通道执行。
+  if (presets.length) return available(versions[0])
+  // 这个 Profile 没有启动项，也就没人选过版本类型：所有类别都算（Alpha 全收），跟以前一样取最高已装。
+  return available(resolvePresetVersion({ version: 'auto', profile, updateChannel: VERSION_CHANNEL.ALPHA }, homeDir(), config))
+}
+
+/**
+ * 每个第三方插件在 registry 上的最新版本。官方组件（@deepseek-ai/*）跳过——那些版本由 dsh 决定。
+ * 插件多是预发布版，dist-tags.latest 不一定指向最新的那个，所以按版本号比出最大的一个。
+ */
+async function checkPluginUpdates({ force = false, profile = PROFILE_NAME } = {}) {
+  profile = safeProfile(profile)
+  const now = Date.now()
+  const cacheKey = profileKey(profile)
+  if (!force && pluginUpdateCache.profile === cacheKey && pluginUpdateCache.data && now - pluginUpdateCache.at < PLUGIN_UPDATE_TTL) return pluginUpdateCache.data
+  const queue = listPlugins(profileDirOf(profile)).plugins.filter((plugin) => !plugin.official)
+  const result = {}
+  await Promise.all(Array.from({ length: Math.min(PLUGIN_UPDATE_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length) {
+      const plugin = queue.shift()
+      try {
+        const { versions, tags } = await listPackage(plugin.name)
+        const latest = versions[0] || ''
+        const parsed = latest && plugin.version ? cmpVer(parseVer(latest), parseVer(plugin.version)) : 0
+        result[plugin.name] = { current: plugin.version, latest, latestTag: tags.latest || '', hasUpdate: parsed > 0 }
+      } catch (error) {
+        // 某个包查不到就如实说查不到，别把整次检查拖挂（离线、私有包、镜像缺条目都会有）
+        result[plugin.name] = {
+          current: plugin.version,
+          latest: '',
+          hasUpdate: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+  }))
+  const data = { checkedAt: new Date().toISOString(), plugins: result }
+  pluginUpdateCache.at = now
+  pluginUpdateCache.profile = cacheKey
+  pluginUpdateCache.data = data
+  return data
+}
+
+/** 升一个插件到指定版本（缺省用最新版），升完回读磁盘确认版本真的换了。 */
+async function updatePlugin(name, { latest = '', profile = PROFILE_NAME } = {}) {
+  profile = safeProfile(profile)
+  const plugin = listPlugins(profileDirOf(profile)).plugins.find((item) => item.name === name)
+  if (!plugin) throw new Error(`这个 profile 里没有 ${name}`)
+  if (plugin.official) throw new Error(`${name} 是官方组件，版本跟着 dsh 走，不单独更新`)
+  const target = latest || (await checkPluginUpdates({ force: true, profile })).plugins[name]?.latest
+  if (!target) throw new Error(`查不到 ${name} 的最新版本`)
+  if (plugin.version && cmpVer(parseVer(target), parseVer(plugin.version)) <= 0) {
+    return { name, from: plugin.version, to: plugin.version, changed: false }
+  }
+  pushLog(`更新插件 ${name}: ${plugin.version || '未知'} → ${target}`)
+  await addPlugin(await pluginCommandVersion(profile), `${name}@${target}`, { profile })
+  const after = listPlugins(profileDirOf(profile)).plugins.find((item) => item.name === name)
+  // addPlugin 只保证命令成功：装完再回读一次，别把「命令没报错」当成「版本真的换了」
+  if (after?.version !== target) {
+    throw new Error(`${name} 装完是 ${after?.version || '未知'}，不是 ${target}（看终端日志；杀软拦截、store 异常都会这样）`)
+  }
+  pluginUpdateCache.at = 0
+  return { name, from: plugin.version, to: after.version, changed: true }
+}
+
+/** 依次更新所有可更新的插件：单个失败不影响其它，最后如实汇总。 */
+async function updateAllPlugins(profile = PROFILE_NAME) {
+  const check = await checkPluginUpdates({ force: true, profile })
+  const names = Object.entries(check.plugins).filter(([, info]) => info.hasUpdate).map(([name]) => name)
+  const done = []
+  const failed = []
+  for (const name of names) {
+    try {
+      done.push(await updatePlugin(name, { latest: check.plugins[name].latest, profile }))
+    } catch (error) {
+      failed.push({ name, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return { checked: names.length, done, failed }
+}
+
+
+/**
+ * 跑一次 `dsh plugin install`（把 profile 清单里的依赖装齐）。
+ *
+ * 写在这儿的理由：每次都得带上「这台机器读不了目录链接」那条退路（改用真实目录重试），
+ * 启动自愈和同步拉回插件清单两条路都要它。调用方负责 pluginBusy 与进度条的收发。
+ */
+async function runProfileInstall(version, options = {}) {
+  const profile = options.profile || PROFILE_NAME
+  const onProgress = options.onProgress
+  const log = options.log || pushLog
+  const target = () => join(homeDir(), 'profiles', profile)
+  const run = () => runPluginCommand(version, ['install', '--config.auto-install-peers=false'], 'dsh plugin install', { profile, onProgress })
+  await mkdir(homeDir(), { recursive: true })
+  await ensureProfileNpmrc(profile)
+  // 这轮进度属于哪个 profile：恢复档弹窗据此把「正在重装依赖」接到真实进度上。
+  pluginProgressName = ''
+  pluginProgressProfile = profile
+  emitPluginProgress({ phase: 'resolve' })
+  try {
+    await run()
+  } catch (error1) {
+    const text = `${error1 instanceof Error ? error1.message : error1}\n${(error1?.tail || []).join('\n')}`
+    // 和装插件那条路同样的退路：这台机器读不了目录链接时，让 pnpm 改用真实目录再装一遍。
+    // 报错长这样：UNKNOWN: unknown error, open ...node_modules\<pkg>\package.json（-4094）
+    if (!looksLikeLinkFailure(text) || !(await useHoistedLinker(profile))) throw error1
+    log('这台机器读不了目录链接，改用真实目录（node-linker=hoisted）重试')
+    const again = pruneDanglingLinks(join(target(), 'node_modules'))
+    if (again) log(`先清理了 ${again} 个悬空的链接`)
+    await run()
+  } finally {
+    pluginProgressName = ''
+    pluginProgressProfile = ''
+    invalidateStorageBreakdown()
+    emitPluginProgress(null)
+  }
+}
+
+/**
+ * profile 依赖自愈：dsh 报 `cannot resolve profile bundle "x"` 说明 profile 的
+ * node_modules 里那个包不在（没装成，或 pnpm 中途被打断只留了断链），按 dsh 的
+ * 提示重装 profile 依赖即可。
+ * @returns 是否值得重试启动
+ */
+async function repairProfileDeps(version, error, profile = PROFILE_NAME) {
+  const failure = error?.failure || lastFailure
+  const bundles = parseUnresolvedBundles(`${failure?.message || ''}\n${(failure?.tail || []).join('\n')}`)
+  if (!bundles.length) return false
+  if (pluginBusy) {
+    pushLog(`[兼容] profile 里解析不到 ${bundles.join('、')}，但正在装插件，跳过依赖重建`)
+    return false
+  }
+  const broken = pruneDanglingLinks(join(profileDirOf(profile), 'node_modules'))
+  if (broken) pushLog(`[兼容] 先清理了 ${broken} 个悬空的链接`)
+  pushLog(`[兼容] profile ${profile} 里解析不到 ${bundles.join('、')}，重建 profile 依赖（dsh plugin install）…`)
+  pluginBusy = true
+  try {
+    await runProfileInstall(version, { profile })
+    pushLog('[兼容] profile 依赖已重建，重试启动…')
+    return true
+  } catch (error2) {
+    pushLog(`[兼容] 重建 profile 依赖失败：${error2 instanceof Error ? error2.message : error2}`)
+    return false
+  } finally {
+    pluginBusy = false
+  }
+}
+
+/** 读一个目录下 package.json 的版本号（读不到给 null）。 */
+function readPackageVersion(dir) {
+  try {
+    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version ?? null
+  } catch {
+    return null
+  }
+}
+
+// ---- 整合包：把一批插件 + 一套配置一次装进一个 profile ----
+//
+// 与插件页的分工：插件页管「一个包」，整合包页管「一套环境」——一次写进 package.json 的
+// 依赖与层栈、补丁层、用户级文件，再走同一条 `dsh plugin install` 把依赖装齐。格式用的是
+// 生态里的 .dspack（DSH-PackForge），详情见 packs.js。
+//
+// 装进新 profile 是默认姿势：dsh 一次只跑一个 profile，新环境与现有插件互不污染，
+// 装完在插件页切过去就行。每一步都可能失败（下载、解包、写文件、pnpm），所以每次安装
+// 之前先备份被覆盖的文件，失败自动回滚。
+
+/** 整合包的进度：走 SSE 的 progress 事件，靠 kind 与插件页那条区分开。 */
+let packProgress = null
+let packProgressName = ''
+/** 检查过的包先放这儿，安装时不用再下载一遍（页面刷新也还在）。 */
+const packInspectCache = new Map()
+/** 市场索引缓存：一次列表拉几百 KB，别每开一次页面就重下一遍。 */
+let packsMarketCache = { at: 0, data: null }
+const PACK_MARKET_TTL = 10 * 60 * 1000
+/** 检查过的包最多留多久（inbox 里的临时文件）。 */
+const PACK_INBOX_TTL = 6 * 60 * 60 * 1000
+/** 最近一次导出的文件：只允许「在文件夹里显示」我们自己的产物。 */
+let lastExportPath = ''
+
+function packsDir() {
+  return join(DATA, 'packs')
+}
+
+function packInboxDir() {
+  return join(packsDir(), 'inbox')
+}
+
+function newPackToken() {
+  return `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
+}
+
+function emitPackProgress(state) {
+  packProgress = state
+  emit('progress', state ? { ...state, kind: 'pack', name: packProgressName } : { phase: 'idle', kind: 'pack' })
+}
+
+/** 整合包页的载荷：已装的包、可切换的 profile、市场地址。 */
+function packsPayload() {
+  const state = readPackState(packDataDir())
+  const profilesRoot = join(homeDir(), 'profiles')
+  const cards = []
+  for (const profile of listProfiles()) {
+    let plugins = []
+    try {
+      plugins = listPlugins(join(profilesRoot, safeProfile(profile))).plugins
+    } catch {
+      continue
+    }
+    const thirdParty = plugins.filter((plugin) => !plugin.official)
+    const realRecords = state.packs.filter((record) => record.profile === profile)
+    // 桌面增强的三个插件在插件页里也当成一组「整合包」显示；它不是真实安装记录，
+    // 只借 groupPackPlugins 的分组，卸载 / 安装走设置页那一套。
+    const hasDesktop = DESKTOP_PLUGINS.some((one) => plugins.some((plugin) => plugin.name === one.name))
+    const records = hasDesktop
+      ? [...realRecords, {
+        name: DESKTOP_ENHANCE_ID,
+        displayName: DESKTOP_ENHANCE_NAME,
+        version: '',
+        bundles: DESKTOP_PLUGINS.map((plugin) => plugin.name),
+        dependencies: Object.fromEntries(DESKTOP_PLUGINS.map((plugin) => [plugin.name, plugin.spec])),
+        synthetic: true,
+      }]
+      : realRecords
+    // 用户新建的空环境也需要在插件页管理；尚未初始化的模板不占列表。
+    if (!existsSync(join(profilesRoot, profile, 'package.json')) && !records.length) continue
+    const latest = realRecords.length ? realRecords[realRecords.length - 1] : null
+    cards.push({
+      profile,
+      // 卡片标题就是 profile 名（dsh 和插件页的 profile 切换器都这么叫它）
+      name: profile,
+      pluginCount: plugins.length,
+      officialCount: plugins.length - thirdParty.length,
+      // 整包开关说的是「这个环境里的插件」，官方组件不参与
+      enabled: thirdParty.some((plugin) => plugin.enabled),
+      toggleable: thirdParty.some((plugin) => plugin.toggleable),
+      plugins,
+      // 来源：装过整合包就带上包的信息与安装记录；手动拼的 profile 记录为空
+      records,
+      source: latest?.source || '',
+      installedAt: latest?.installedAt || '',
+      packName: latest ? (latest.displayName || latest.name) : '',
+      packVersion: latest?.version || '',
+      createdProfile: records.some((record) => record.createdProfile === true),
+      template: TEMPLATE_PROFILES.includes(profile),
+      // 模板只是可重新初始化的用户环境；只有官方桌面端专用目录需要保留保护。
+      removable: !CLI_BLOCKED_PROFILES.has(profile.toLowerCase()),
+    })
+  }
+  // 当前 profile 排最前，其余按插件数量从多到少
+  cards.sort((a, b) => {
+    if (a.profile === PROFILE_NAME) return -1
+    if (b.profile === PROFILE_NAME) return 1
+    return b.pluginCount - a.pluginCount
+  })
+  return {
+    packs: cards,
+    profile: PROFILE_NAME,
+    home: homeDir(),
+    // 启动选择器保留可初始化的默认模板，插件管理只列当前目录里实际存在的 Profile。
+    profiles: cards.map((item) => item.profile).sort(),
+    marketUrl: process.env.DSH_PACK_MARKET || MARKET_INDEX_URL,
+    busy: pluginBusy,
+    progress: packProgress,
+    builtin: builtinPack(),
+  }
+}
+
+/** 从安装记录声明里取插件归属，再与当前 profile 的真实依赖取交集。 */
+function packPluginSelection(profile, plugins, selector) {
+  const installed = readPackState(packDataDir()).packs.filter((record) => record.profile === profile)
+  const byName = new Map(plugins.map((plugin) => [plugin.name, plugin]))
+  if (selector?.group === 'other') {
+    const owned = new Set()
+    for (const record of installed) {
+      for (const name of [...(record.bundles || []), ...Object.keys(record.dependencies || {}), ...Object.keys(record.specs || {})]) owned.add(String(name))
+    }
+    return { names: plugins.filter((plugin) => !plugin.official && !owned.has(plugin.name)).map((plugin) => plugin.name), group: 'other' }
+  }
+  if (selector?.pack === DESKTOP_ENHANCE_ID) {
+    // 桌面增强不是真实安装记录：整组开关就是这三个插件里装了的那些。
+    const names = DESKTOP_PLUGINS.map((plugin) => plugin.name)
+      .filter((name) => byName.has(name) && !byName.get(name).official)
+    return { names, group: 'pack', pack: DESKTOP_ENHANCE_ID }
+  }
+  if (selector?.pack) {
+    const record = installed.find((item) => item.name === String(selector.pack))
+    if (!record) throw new Error(`profile「${profile}」没有「${selector.pack}」这条整合包记录`)
+    const declared = new Set([...((record.bundles || []).map(String)), ...Object.keys(record.dependencies || {}), ...Object.keys(record.specs || {})])
+    return { names: [...declared].filter((name) => byName.has(name) && !byName.get(name).official), group: 'pack', pack: record.name }
+  }
+  return { names: plugins.filter((plugin) => !plugin.official).map((plugin) => plugin.name), group: 'profile' }
+}
+
+/**
+ * 随安装包发的那份整合包（安装目录 packs/ 下第一份带 manifest.json 的目录）。
+ *
+ * 推荐包暂无前端入口；保留 API 元数据与本地配方，供按目录检查和安装。
+ */
+function builtinPack() {
+  const root = join(ROOT, 'packs')
+  let names = []
+  try {
+    names = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+  } catch {
+    return null
+  }
+  for (const name of names) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(root, name, 'manifest.json'), 'utf8'))
+      const display = manifest.displayName
+      const displayName = typeof display === 'string'
+        ? display
+        : (display?.['zh-CN'] || display?.['en-US'] || manifest.name || name)
+      return {
+        path: join(root, name),
+        name: String(manifest.name || name),
+        displayName: String(displayName),
+        version: String(manifest.version || ''),
+        description: typeof manifest.description === 'string' ? manifest.description : '',
+        profileName: String(manifest.profileName || ''),
+        pluginCount: Array.isArray(manifest.bundles) ? manifest.bundles.length : 0,
+      }
+    } catch {
+      // 不是整合包目录，看下一个
+    }
+  }
+  return null
+}
+
+/**
+ * 网络失败的说明：undici 只会给一句 `fetch failed`，真正的原因藏在 error.cause 里。
+ *
+ * 国内最常见的两种断法「看起来一模一样、其实完全不同」，光看 fetch failed 猜不到该做什么：
+ * - raw.githubusercontent.com（市场索引在那儿）的 **DNS 被污染**：解析成 0.0.0.0 / 空地址，
+ *   请求还没出门就失败（实测 cause 是 ENOENT，秒回）；
+ * - github.com（release 资产那儿）**443 连不上**：解析正常，但一路等到超时（约 21 秒）。
+ * 所以这里把域名、原因和出路都写进错误里，页面直接显示给用户看。
+ */
+function describeFetchError(error, url = '') {
+  // 代理和直连都没通（proxy.js 拼的错误）：代理那头也按同一套词汇表讲一遍，
+  // 否则「走代理没通」这句会被下面的 ECONNRESET 分支吃掉，用户根本看不到
+  if (error?.proxyError) {
+    return `走代理没通（${describeFetchError(error.proxyError, error.proxyUrl || '')}），直连也没通`
+  }
+  const cause = error?.cause
+  const code = String(cause?.code || cause?.errno || '').toUpperCase()
+  const causeMessage = String(cause?.message || '')
+  const host = (() => {
+    try {
+      return new URL(String(url)).host
+    } catch {
+      return ''
+    }
+  })()
+  if (code === 'ENOENT' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return `${host || '域名'} 解析不出来（DNS 返回了空地址，通常是 DNS 被污染）`
+  }
+  if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT'].includes(code)) {
+    return `连不上 ${host || '目标'}（${code}）`
+  }
+  if (/certificate|self.signed|CERT_|TLS|SSL/i.test(causeMessage)) {
+    return `${host || '目标'} 的证书校验不过（${causeMessage}）`
+  }
+  const detail = error?.message || '请求失败'
+  return `${host ? `${host}：` : ''}${detail}${code ? `（${code}）` : ''}`
+}
+
+/**
+ * 连不上时的第二条出路：现在是不是在走代理、走的哪个。
+ * 代理开着却连不上，第一件该看的就是它——比「换下载源」更可能是原因（见 proxy.js 开头）。
+ */
+function proxyHint() {
+  const proxy = resolveProxy()
+  return proxy.url ? `；也可以看设置页的「网络代理」（现在走 ${proxy.url}），或先选「不走代理」试试` : ''
+}
+
+/**
+ * 网络自检：按当前设置（含代理）去打一次下载源的 /-/ping。
+ * 这是给「连不上但不知道为什么」准备的一步：通了说明版本列表也拉得动；不通就把
+ * describeFetchError 的说法原样带回来，页面直接显示。
+ */
+async function testNetwork() {
+  const url = `${currentRegistry()}/-/ping`
+  const proxy = resolveProxy(await loadSettings())
+  try {
+    const res = await netFetch(url, { signal: AbortSignal.timeout(20_000) })
+    // 代理失败但直连兜住了，也要如实说出来：否则「代理填错了、直连能通」看起来一切正常
+    const proxyError = res.proxyError || ''
+    if (!res.ok) return { ok: false, url, via: res.viaProxy, proxy: proxy.url, proxyError, detail: `HTTP ${res.status}` }
+    // 读掉响应体：握手/取数据阶段的失败（代理隧道断在半路）到这里才暴露
+    await res.text()
+    return { ok: true, url, via: res.viaProxy, proxy: proxy.url, proxyError, detail: '' }
+  } catch (error) {
+    const detail = error?.name === 'AbortError' || error?.name === 'TimeoutError'
+      ? '20 秒没回应（超时）'
+      : describeFetchError(error, url)
+    return { ok: false, url, via: '', proxy: proxy.url, proxyError: '', detail }
+  }
+}
+
+/** 下载上限：整合包只装清单与配置，超过这个量级的多半不是包（也免得把内存吃光）。 */
+const PACK_DOWNLOAD_LIMIT = 64 * 1024 * 1024
+
+async function downloadToFile(url, dest, { sha256 = '', log = pushLog, onProgress, limit = PACK_DOWNLOAD_LIMIT } = {}) {
+  // 只有 GitHub 发布资产才套镜像前缀；本地/其他地址原样请求
+  const candidates = /^https:\/\/github\.com\//i.test(url) ? updateUrlCandidates(url, UPDATE_SOURCE) : [url]
+  let last = null
+  for (const candidate of candidates) {
+    try {
+      log(`下载 ${candidate}`)
+      const res = await netFetch(candidate, { redirect: 'follow' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const total = Number(res.headers.get('content-length')) || 0
+      if (total > limit) throw new Error(`文件太大（${Math.round(total / 1048576)} MB，上限 ${Math.round(limit / 1048576)} MB）`)
+      const chunks = []
+      let done = 0
+      for await (const chunk of res.body) {
+        chunks.push(chunk)
+        done += chunk.length
+        if (done > limit) throw new Error(`下载超过上限（${Math.round(limit / 1048576)} MB），已停下`)
+        onProgress?.({ phase: 'download', done, total })
+      }
+      const buffer = Buffer.concat(chunks)
+      if (total && buffer.length !== total) throw new Error(`下载不完整（${buffer.length}/${total} 字节）`)
+      if (sha256) {
+        const got = createHash('sha256').update(buffer).digest('hex')
+        if (got !== String(sha256).toLowerCase()) {
+          throw new Error(`校验对不上（期望 ${String(sha256).slice(0, 12)}…，实际 ${got.slice(0, 12)}…）`)
+        }
+      }
+      await mkdir(dirname(dest), { recursive: true })
+      await writeFile(dest, buffer)
+      return { url: candidate, bytes: buffer.length }
+    } catch (error) {
+      last = error
+      log(`下载失败：${error.message}`)
+    }
+  }
+  // 直连 GitHub 在国内基本拿不到 release 资产，而「更新下载源」默认是直连——
+  // 失败时把出路写进错误里（和启动器自更新那句同样的写法），否则用户只看到「下载失败」
+  const hint = UPDATE_SOURCE === 'mirror' ? '' : '；如果直连 GitHub 不通，可以在设置页把「下载源」改成「镜像源」再试'
+  throw new Error(`下载失败：${describeFetchError(last, url)}${proxyHint()}${hint}`)
+}
+
+/** GitHub 接口的确定性回答：这类错误换镜像也没用，直接报出来。 */
+const GITHUB_FINAL_RE = /找不到|还没有发布|限流/
+
+/**
+ * 从 GitHub 仓库取整合包：release 资产里的 .dspack（其次 .zip）。
+ * 这是生态里的发布约定（仓库打 dsh-pack topic + Release 挂 .dspack）。
+ */
+async function resolveGithubPack(repo, ref, log = pushLog) {
+  const clean = String(repo).replace(/\.git$/i, '')
+  const api = ref
+    ? `https://api.github.com/repos/${clean}/releases/tags/${encodeURIComponent(ref)}`
+    : `https://api.github.com/repos/${clean}/releases/latest`
+  let payload = null
+  let last = null
+  for (const candidate of updateUrlCandidates(api, UPDATE_SOURCE)) {
+    try {
+      const res = await netFetch(candidate, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-x' } })
+      if (res.status === 404) throw new Error(ref ? `找不到 ${clean} 的 ${ref} 这个发布` : `${clean} 还没有发布过 release`)
+      if (res.status === 403 || res.status === 429) {
+        throw new Error('GitHub 接口限流了（匿名每小时 60 次）：过一会儿再试，或者直接把 release 里的 .dspack 链接贴进来')
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      payload = await res.json()
+      break
+    } catch (error) {
+      last = error
+      log(`取 release 信息失败：${error.message}`)
+      if (GITHUB_FINAL_RE.test(error.message)) throw error
+    }
+  }
+  if (!payload) throw last || new Error('取 release 信息失败')
+  const assets = Array.isArray(payload.assets) ? payload.assets : []
+  const asset = assets.find((item) => /\.dspack$/i.test(item.name)) || assets.find((item) => /\.zip$/i.test(item.name))
+  if (!asset) {
+    throw new Error(`${clean} 的${ref ? ` ${ref}` : '最新'} release 里没有 .dspack/.zip 资产${assets.length ? `（只有 ${assets.map((item) => item.name).join('、')}）` : ''}`)
+  }
+  return { url: asset.browser_download_url, name: asset.name, size: asset.size, sha256: '', version: payload.tag_name || '', repo: clean }
+}
+
+function normalizeMarketEntry(item) {
+  const downloadUrl = String(item?.downloadUrl || item?.url || '')
+  return {
+    id: String(item?.id || `${item?.owner || ''}.${item?.repo || item?.name || ''}`),
+    name: String(item?.name || ''),
+    version: String(item?.version || ''),
+    type: String(item?.type || 'profile'),
+    displayName: localized(item?.displayName, LANG) || String(item?.name || ''),
+    description: localized(item?.description, LANG),
+    author: String(item?.author || item?.owner || ''),
+    owner: String(item?.owner || ''),
+    repo: String(item?.repo || ''),
+    repoUrl: marketRepository(item)?.url || '',
+    category: String(item?.category || ''),
+    dshVersion: String(item?.dshVersion || ''),
+    bundleCount: Number(item?.bundleCount) || 0,
+    depCount: Number(item?.depCount) || 0,
+    size: Number(item?.size) || 0,
+    sha256: String(item?.sha256 || ''),
+    updatedAt: String(item?.updatedAt || ''),
+    downloadUrl,
+    manifestVersion: Number(item?.manifestVersion) || 0,
+  }
+}
+
+const readMarketStats = createMarketStatsReader({ fetchRepo: netFetch })
+
+/** 读整合包市场索引（PackForge 的公开索引：仓库打 dsh-pack topic 就会被采集进去）。 */
+async function marketEntries({ force = false } = {}) {
+  const now = Date.now()
+  if (!force && packsMarketCache.data && now - packsMarketCache.at < PACK_MARKET_TTL) return packsMarketCache.data
+  const url = process.env.DSH_PACK_MARKET || MARKET_INDEX_URL
+  let last = null
+  for (const candidate of updateUrlCandidates(url, UPDATE_SOURCE)) {
+    try {
+      const res = await netFetch(candidate, { headers: { 'user-agent': 'dsh-x' } })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const index = await res.json()
+      const list = Array.isArray(index?.modpacks) ? index.modpacks
+        : Array.isArray(index?.packs) ? index.packs
+          : Array.isArray(index) ? index : []
+      const data = {
+        url,
+        entries: list.map(normalizeMarketEntry).filter((entry) => entry.downloadUrl && entry.name),
+        generatedAt: String(index?.generatedAt || ''),
+        fetchedAt: new Date().toISOString(),
+      }
+      packsMarketCache = { at: now, data }
+      return data
+    } catch (error) {
+      last = error
+    }
+  }
+  throw new Error(`读整合包市场失败：${describeFetchError(last, url)}`)
+}
+
+/**
+ * 打开一个来源（本地文件/目录直接用，网络来源下到 inbox），返回解析好的包。
+ * token 由调用方给：同一个 token 的临时文件留给安装那一步用。
+ */
+async function openPackSource(source, { token = newPackToken(), log = pushLog, onProgress } = {}) {
+  const parsed = typeof source === 'string' ? parsePackSource(source) : source
+  if (parsed.kind === 'dir') {
+    return { pack: parsePackDir(parsed.path), file: parsed.path, source: describeSource(parsed), token }
+  }
+  if (parsed.kind === 'file') {
+    if (!/\.(?:dspack|zip)$/i.test(parsed.path)) log(`按压缩包读取（扩展名不是 .dspack）：${basename(parsed.path)}`)
+    const buffer = await readFile(parsed.path)
+    return { pack: parsePackArchive(buffer), file: parsed.path, source: describeSource(parsed), token }
+  }
+  const dir = join(packInboxDir(), token)
+  const dest = join(dir, 'pack.dspack')
+  let url = parsed.url || ''
+  let sha256 = parsed.sha256 || ''
+  let resolved = ''
+  if (parsed.kind === 'github') {
+    const info = await resolveGithubPack(parsed.repo, parsed.ref, log)
+    url = info.url
+    resolved = `${info.repo}${info.version ? ` ${info.version}` : ''}`
+  }
+  if (parsed.kind === 'market') resolved = parsed.id || ''
+  if (!url) throw new Error('这个来源没有可下载的地址')
+  onProgress?.({ phase: 'fetch', done: 0, total: Number(parsed.size) || 0 })
+  const info = await downloadToFile(url, dest, {
+    sha256,
+    log,
+    // 阶段名统一由这边定：下载整合包是 fetch，装依赖才是 install（pnpm 自己的相位放在 step 里）
+    onProgress: onProgress ? (state) => onProgress({ phase: 'fetch', done: state.done, total: state.total }) : undefined,
+  })
+  onProgress?.({ phase: 'unpack', done: 0, total: 0 })
+  return {
+    pack: parsePackArchive(await readFile(dest)),
+    file: dest,
+    source: resolved || describeSource(parsed),
+    token,
+    bytes: info.bytes,
+  }
+}
+
+/** 检查结果 + 安装计划：页面上的「装什么、装到哪、会覆盖什么」都是它。 */
+function packPlanPayload(pack, profile = '') {
+  const target = safeProfile(profile || defaultProfileFor(pack))
+  const base = { pack: packSummary(pack), target: { profile: target } }
+  try {
+    const plan = planInstall(pack, { home: homeDir(), profile: target, hostProfile: PROFILE_NAME })
+    return {
+      ...base,
+      ok: pack.ok && plan.ok,
+      target: { profile: target, createsProfile: plan.createsProfile, profileDir: plan.profileDir },
+      plan: {
+        notes: plan.notes,
+        warnings: plan.warnings,
+        errors: plan.errors,
+        writes: plan.writes.map((write) => ({ rel: write.rel, kind: write.kind || '', note: write.note || '' })),
+      },
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ...base, ok: false, plan: { notes: [], warnings: pack.warnings, errors: [...pack.errors, message], writes: [] } }
+  }
+}
+
+/** 清掉过期的 inbox（检查过但一直没装的包）。 */
+async function prunePackInbox() {
+  const root = packInboxDir()
+  let entries = []
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch {
+    return
+  }
+  const deadline = Date.now() - PACK_INBOX_TTL
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const full = join(root, entry.name)
+    try {
+      if (statSync(full).mtimeMs < deadline) await rm(full, { recursive: true, force: true })
+    } catch {
+      // 删不掉就算了，下次再试
+    }
+  }
+}
+
+async function install(version) {
+  const ver = safeVersion(version)
+  if (installing) throw new Error(`正在安装 ${installing}`)
+  const config = await loadConfig()
+  if (listedVersions(config).includes(ver) || existsSync(binPath(ver))) {
+    if (!listedVersions(config).includes(ver)) {
+      config.versions = [ver, ...listedVersions(config)]
+      await saveConfig(config)
+      await emitState()
+    }
+    return
+  }
+
+  installing = ver
+  installProgress = { phase: 'resolve' }
+  await emitState()
+  emit('progress', installProgress)
+  const dir = versionDir(ver)
+  await mkdir(dir, { recursive: true })
+  pushLog(`安装 ${PKG}@${ver}`)
+  try {
+    await installSpec(dir, PKG, ver, (line, progress) => {
+      // 「已安装 N/N」「已解析 N」只是进度，进度条那边（progress 事件）已经在显示了；
+      // 再打进终端就是刷屏——装 700 多个包能刷出上百行。
+      if (line && !NOISY_LOG_RE.test(line)) pushLog(line)
+      if (progress) {
+        installProgress = progress
+        emit('progress', progress)
+      }
+    })
+    if (!existsSync(binPath(ver))) throw new Error('安装完成但找不到 lib/bin.js')
+    await mkdir(homeDir(), { recursive: true })
+    config.versions = [ver, ...listedVersions(config).filter((item) => item !== ver)]
+    await saveConfig(config)
+    pushLog(`${ver} 安装完成`)
+    // 装完新版顺手清掉更旧的（保留最新 + 最近装的一个，正在跑的除外）
+    await pruneVersions(config)
+  } catch (error) {
+    if (!listedVersions(config).includes(ver)) {
+      await rm(dir, { recursive: true, force: true })
+    }
+    throw error
+  } finally {
+    installing = null
+    installProgress = null
+    emit('progress', { phase: 'idle' })
+    await emitState()
+  }
+}
+
+/** npm 整理时会移动文件，启动准备和插件命令也必须纳入互斥，不能只看已启动的进程。 */
+async function optimizeVersion(version) {
+  const ver = safeVersion(version)
+  if (installing || packInstalling || pluginBusy || startChains.size || startingProfiles.size) throw new Error('正在安装或启动，请稍后再优化依赖')
+  if (instanceList().some(proc => proc.version === ver)) throw new Error('请先停止此版本的所有实例再优化依赖')
+  revokeIdleInstanceLinks(link => link.version === ver)
+  if (!isManaged(ver) || !existsSync(binPath(ver))) throw new Error('只能优化启动器管理的已安装版本')
+  // 在第一次 await 前占住操作，避免其他窗口同时启动、卸载或切换版本目录。
+  installing = optimizingVersion = ver
+  installProgress = { phase: 'optimize' }
+  try {
+    await emitState()
+    emit('progress', installProgress)
+    pushLog(`优化 ${ver} 的重复依赖`)
+    await optimizeDependencies(versionDir(ver), line => { if (line) pushLog(line) })
+    if (!existsSync(binPath(ver))) throw new Error('整理后找不到官方入口 lib/bin.js')
+    pushLog(`${ver} 依赖优化完成`)
+    return { ok: true }
+  } finally {
+    installing = optimizingVersion = null
+    installProgress = null
+    emit('progress', { phase: 'idle' })
+    await emitState()
+  }
+}
+
+/** 等 dsh 退出的上限：正常 taskkill /F 是毫秒级，只有卡死的进程才会用满。 */
+const STOP_EXIT_TIMEOUT_MS = 5000
+/** 第一次终止没生效后的加时：再给这么久；还活着就报错，绝不静默丢掉跟踪记录。 */
+const STOP_KILL_GRACE_MS = 3000
+/** taskkill 本身可能挂起，两次命令等待都必须计入退出预算。 */
+const STOP_COMMAND_TIMEOUT_MS = STOP_EXIT_TIMEOUT_MS + STOP_KILL_GRACE_MS
+const STOP_SHUTDOWN_MARGIN_MS = 1000
+const STOP_SHUTDOWN_TIMEOUT_MS = STOP_COMMAND_TIMEOUT_MS * 2 + STOP_EXIT_TIMEOUT_MS + STOP_KILL_GRACE_MS + STOP_SHUTDOWN_MARGIN_MS
+
+/**
+ * 等子进程真的退出（'exit' 事件），返回是否退出。
+ *
+ * 不能等 'close'：'close' 要等 stdout/stderr 两条**管道**关闭，而 dsh 拉起的插件、subprocess
+ * 之类的孙进程会把它们继承下去。孙进程一旦脱离父进程（父进程先死），taskkill /T 按进程树
+ * 也收不到它，管道就一直开着，'close' 能拖到几十秒甚至永远不来——可 dsh 自己（'exit'）早没了。
+ * 原来 stop() 等 'close'，5 秒一到就删跟踪记录往下走，重启时旧进程可能还占着 profile 和端口，
+ * 新的又起来了：这正是 #57 里「重启后连不上、随后插件文件被占用」的形状。
+ */
+function waitExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let timer
+    const onExit = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    timer = setTimeout(() => {
+      child.removeListener('exit', onExit)
+      resolve(false)
+    }, timeoutMs)
+    child.once('exit', onExit)
+  })
+}
+
+/**
+ * 终止一个实例进程（Windows 连整棵树）。
+ * @returns {Promise<boolean>} 这次终止**动作**有没有执行成功；进程死没死要看 waitExit。
+ *
+ * 两处必须留神，都是踩过的坑：
+ * - 必须等 taskkill 结束：fire-and-forget 的写法连它失败都看不见，进程活着一律当死了。
+ * - 必须挂 'error'：spawn 找不到 taskkill 时（PATH 被改、精简系统），没挂监听的 ChildProcess
+ *   会抛未捕获的 'error'，把管理服务自己打死。
+ * 退出码 0 才算杀掉。别把 128 当「进程已经不在了」放过去：调试 #57 时见过 taskkill 明确
+ * 打印「could not be terminated」也返回 128，这时候等 5 秒再补一刀，白白拖着重启。非 0
+ * 一律当没杀动，立刻退回到 Node 自己的 kill——Windows 上就是 TerminateProcess，只收这一个
+ * 进程（子进程收不到，所以 taskkill 仍是主路径，fallback 只是别让主进程活在那儿）。
+ */
+async function killTree(pid, child, force = true) {
+  if (!pid) return false
+  if (process.platform === 'win32') {
+    const killed = await new Promise((resolve) => {
+      let done = false
+      let timer
+      const finish = (value) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+      let task
+      try {
+        task = spawn('taskkill', ['/pid', String(pid), '/T', ...(force ? ['/F'] : [])], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+      } catch {
+        return finish(false)
+      }
+      // taskkill 自己也可能挂住（比如卡在别的句柄上），别让它拖住收尾
+      timer = setTimeout(() => finish(false), STOP_COMMAND_TIMEOUT_MS)
+      task.on('error', () => finish(false))
+      task.on('exit', (code) => finish(code === 0))
+    })
+    if (killed) return true
+    try {
+      return child ? child.kill('SIGKILL') : false
+    } catch {
+      return false
+    }
+  }
+  try {
+    process.kill(pid, force ? 'SIGKILL' : 'SIGTERM')
+    return true
+  } catch (error) {
+    // 进程已经没了：目的达到
+    return error?.code === 'ESRCH'
+  }
+}
+
+/**
+ * 让一个实例进程真的退出：先终止一次，等；没死就强制再杀一次，再等。
+ * @returns {Promise<boolean>} 是否已确认退出（等不到就是没退出，调用方不能当它死了）
+ */
+async function terminateProcess(proc) {
+  const label = `${proc.version}/${proc.profile}`
+  if (!proc.child?.pid) return true
+  // Windows 没有「温和终止」这条路：taskkill 不带 /F 只是发 WM_CLOSE，对控制台进程约等于
+  // 不生效，所以一开始就 /F；POSIX 先 SIGTERM，给它体面退出的机会，再升级到 SIGKILL。
+  try {
+    await killTree(proc.child.pid, proc.child, process.platform === 'win32')
+  } finally {
+    // 必须先让 Windows taskkill /T 找到活根及后代，再允许断管道触发 preload 的退出兜底。
+    proc.instanceLink?.disconnect(proc.child)
+  }
+  if (await waitExit(proc.child, STOP_EXIT_TIMEOUT_MS)) return true
+  pushLog(`${label}（PID ${proc.child.pid}）收到终止信号后 ${STOP_EXIT_TIMEOUT_MS / 1000} 秒仍未退出，强制终止`)
+  await killTree(proc.child.pid, proc.child, true)
+  if (await waitExit(proc.child, STOP_KILL_GRACE_MS)) return true
+  pushLog(`${label}（PID ${proc.child.pid}）强制终止后仍未退出`)
+  return false
+}
+
+/**
+ * 任务通知：实例启动失败 / 意外退出。文案由外壳按当前语言拼（外壳知道 lang，
+ * 也掌管 Notification 与提示音开关），这里只给结构化事实。
+ */
+function notifyInstance(kind, proc, extra = {}) {
+  if (shuttingDown) return
+  try {
+    host.notify({ kind, name: launchNameOf(proc), version: proc.version, profile: proc.profile, ...extra })
+  } catch { /* 通知失败不能影响实例本身 */ }
+}
+
+function attachProcess(version, profile, child, diagnosticContext, instanceLink) {
+  const key = instanceKey(version, profile)
+  let ready
+  const proc = {
+    key,
+    version,
+    profile,
+    home: homeDir(),
+    child,
+    instanceLink,
+    status: 'starting',
+    startupPhase: 'launching',
+    url: null,
+    tail: [],
+    diagnosis: createStartupDiagnosis(diagnosticContext, line => redact(line, secretValues)),
+    diagnosticWarning: null,
+    diagnosticTimer: null,
+    diagnosticContext,
+    exit: null,
+    startedAt: Date.now(),
+    ready: new Promise((resolve) => { ready = resolve }),
+  }
+  instances.set(key, proc)
+  // 一个组合一个实例，日志里要能看出是哪一行是哪台在说话（多开时尤其）
+  const tag = `[${version}/${profile}] `
+  const scheduleDiagnosis = () => {
+    if (proc.status === 'running' && !proc.diagnosticTimer) {
+      // 按输出批次发布，普通日志不刷新诊断；实例退出时取消，不能污染下一次启动。
+      proc.diagnosticTimer = setTimeout(() => {
+        proc.diagnosticTimer = null
+        if (instances.get(key) !== proc) {
+          return
+        }
+        const report = proc.diagnosis.report()
+        if (!report.failed.length && !report.waiting.length && !report.rejected.length && !report.skipped.entries.length && !report.advice.length) {
+          return
+        }
+        proc.diagnosticWarning = {
+          at: Date.now(), version, profile, home: proc.home,
+          message: report.failed.length || report.rejected.length
+            ? '实例仍在运行，但日志报告插件异常'
+            : '实例仍在运行，插件仍在等待或有跳过记录',
+          diagnosis: report,
+          binding: bindDiagnosis(diagnosticContext, report),
+        }
+        void emitState()
+      }, DIAGNOSIS_UPDATE_DELAY)
+    }
+  }
+  const onLine = (line) => {
+    // 首个输出时间：等待就绪那一段里，从 spawn 到第一行之间通常是 Node 启动与依赖解析
+    if (!proc.firstOutputAt) proc.firstOutputAt = performance.now()
+    if (proc.diagnosis.addLine(line)) {
+      scheduleDiagnosis()
+    }
+    // 启动阶段只做粗粒度推断给界面看（不透出日志原文，日志里可能有 token）。
+    // 插件不兼容 / 跳过 bundle 的行不算阶段：0.2.2-rc.1 起这类行在首个输出里就出现（并行做的
+    // 兼容性校验），拿它当「校验依赖」会把十几秒的启动过程整段标错。阶段只认两个：首行前 launching，之后 loading。
+    if (proc.status === 'starting' && proc.startupPhase === 'launching') {
+      proc.startupPhase = 'loading'
+    }
+    if (line.trim()) {
+      // tail 会进失败报告；和落盘日志一样，不能把 dsh web 的真 token 带出去。
+      proc.tail.push(line.replace(/([?&]token=)[^\s&]+/g, '$1***'))
+      if (proc.tail.length > 200) proc.tail.shift()
+    }
+    pushLog(`${tag}${line.replace(/([?&]token=)[^\s&]+/g, '$1***')}`)
+    const match = line.match(READY_RE)
+    if (match && instances.get(key) === proc && proc.status !== 'stopping' && proc.url !== match[1]) {
+      proc.url = match[1]
+      proc.status = 'running'
+      scheduleDiagnosis()
+      proc.readyAt = performance.now()
+      ready()
+      // 正常启动不发通知：用户点了启动就有进度页和窗口，再响一声只是噪音。
+      // 只有失败 / 意外退出（下面那条）才值得打断。
+      emitState()
+      void openLanProxy(proc, tag)
+    }
+  }
+  // 管道的 chunk 没有行/UTF-8 边界；逐块 split 会截断中文、错误码，甚至整个就绪 URL。
+  const readers = [child.stdout, child.stderr].map((input) => createInterface({ input, crlfDelay: Infinity }).on('line', onLine))
+  // 进程退出时管道里可能还有最后几行没读完（失败前的错误行往往就是最后一行）。
+  // 等两条输出流都 close 再收尾，最多等 200ms：既不让诊断尾部丢行，也不被孙进程拖住。
+  let readersClosed = 0
+  const streamsDone = new Promise((resolve) => {
+    for (const reader of readers) {
+      reader.on('close', () => {
+        readersClosed += 1
+        if (readersClosed === readers.length) resolve()
+      })
+    }
+  })
+  child.on('exit', async (code, signal) => {
+    await Promise.race([streamsDone, new Promise((resolve) => setTimeout(resolve, 200))])
+    clearTimeout(proc.diagnosticTimer)
+    proc.diagnosticTimer = null
+    proc.exit = { code, signal }
+    void closeLanProxy(proc)
+    instanceLink?.exited(child)
+    ready()
+    pushLog(`${tag}已退出 code=${code ?? '-'} signal=${signal ?? '-'}`)
+    // 没拿到就绪地址 = 启动失败；用户主动停止（stopping）不打扰
+    if (proc.status !== 'stopping') {
+      notifyInstance(proc.url ? 'exited' : 'failed', proc, { code, signal })
+    }
+    if (instances.get(key)?.child === child) {
+      instances.delete(key)
+      lastHealth = null
+    }
+    emitState()
+  })
+  return proc
+}
+
+/** 局域网端口 → 当前持有代理的实例（同一端口同时只能有一份代理）。 */
+const lanProxyOwners = new Map()
+
+/**
+ * 局域网模式下给一个已就绪的实例起代理（lan-proxy.js）：局域网 IP + dsh 的同一端口 → 127.0.0.1。
+ * 局域网 IP 在这一刻取（换网络后重启实例才跟上）。起不来只丢局域网这一路：dsh 本身照常可用，
+ * 原因写进日志并挂在实例上给页面显示。自重启的继任进程会再走一次这里，所以按地址幂等。
+ */
+async function openLanProxy(proc, tag) {
+  if (!lanBindActive()) return
+  const port = urlPortOf(proc.url)
+  const lanHost = pickLanAddress()
+  if (proc.lanProxy?.port === port && proc.lanProxy.lanHost === lanHost) return
+  await closeLanProxy(proc)
+  // 自重启：继任进程可能先打出就绪行，前任的退出回调还在等输出流（最多 200ms），
+  // 它的代理仍占着同一个局域网端口——由继任者接手，否则这里会撞 EADDRINUSE
+  const previous = lanProxyOwners.get(port)
+  if (previous && previous !== proc) await closeLanProxy(previous)
+  if (!lanHost) {
+    // 页面按 code 拼当前语言的文案，这里只给事实；日志照旧写中文
+    proc.lanError = { code: 'no-address' }
+    pushLog(`${tag}没有找到可用的局域网 IPv4 地址，这次只能本机访问`)
+    void emitState()
+    return
+  }
+  try {
+    const proxy = await startLanProxy({ lanHost, port, onError: message => pushLog(`${tag}局域网代理：${message}`) })
+    // 等监听的这段时间里实例可能已经退出或换了地址：迟到的代理直接关掉
+    if (proc.exit || instances.get(proc.key) !== proc || urlPortOf(proc.url) !== port) {
+      await proxy.close()
+      return
+    }
+    proc.lanProxy = proxy
+    proc.lanError = null
+    lanProxyOwners.set(port, proc)
+    pushLog(`${tag}局域网访问 http://${lanHost}:${port}/ → 127.0.0.1:${port}`)
+  } catch (error) {
+    const address = `${lanHost}:${port}`
+    proc.lanError = { code: error?.code === 'EADDRINUSE' ? 'in-use' : 'listen', address }
+    pushLog(error?.code === 'EADDRINUSE'
+      ? `${tag}局域网地址 ${address} 已被占用（远程访问插件的「局域网访问」开着时会占这个地址，请关掉它）`
+      : `${tag}局域网代理没能监听 ${address}：${error?.message || error}`)
+  }
+  void emitState()
+}
+
+/** 实例退出（停止 / 重启 / 崩溃）时把它的局域网代理一起关掉。 */
+async function closeLanProxy(proc) {
+  const proxy = proc.lanProxy
+  proc.lanProxy = null
+  if (!proxy) return
+  if (lanProxyOwners.get(proxy.port) === proc) lanProxyOwners.delete(proxy.port)
+  await proxy.close().catch(() => {})
+}
+
+async function waitUntilReady(proc, version) {
+  const label = `${version}/${proc.profile}`
+  if (proc.status === 'starting') {
+    if (instances.get(proc.key) !== proc) throw new Error(`${label} 启动失败`)
+    let timer
+    try {
+      // 已经有 stdout 就绪事件，无需再为每次启动额外等一轮 200ms 轮询。
+      await Promise.race([proc.ready, new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          // 起不来就别留活口：先报错，终止在后台升级（卡住的进程会走强制终止，不然跟踪
+          // 记录会永远停在「启动中」）。
+          void terminateProcess(proc).then((gone) => {
+            if (!gone) pushLog(`${label}（PID ${proc.child.pid}）启动超时后仍未退出`)
+          })
+          reject(new Error(`${label} 启动超时`))
+        }, START_TIMEOUT_MS)
+      })])
+    } finally { clearTimeout(timer) }
+  }
+  if (!proc.url) throw new Error(`${label} 启动失败`)
+  return { url: proc.url }
+}
+
+/**
+ * 页面自检：按浏览器的方式抓一次 app 页面（token 换 cookie），把页面引用的所有
+ * 客户端插件包请求一遍。dsh 进程活着不等于页面打得开——实例切换后浏览器里的旧
+ * 页面会一直报「bundle script failed to load」，这一步用来区分"实例有问题"和
+ * "你看的是旧页面"。
+ * @returns {{origin: string, total: number, ok: number, failed: Array<{url: string, status: number, error?: string}>}}
+ */
+export async function checkWebPage(origin, token) {
+  const base = String(origin).replace(/\/+$/, '')
+  const first = await fetch(`${base}/?token=${encodeURIComponent(token)}`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(30000), // 刚就绪时 dsh 还在合成客户端插件包，8 秒经常回不来
+  })
+  const cookie = (first.headers.getSetCookie?.() || []).map((item) => item.split(';')[0]).join('; ')
+  const headers = cookie ? { cookie } : {}
+  const page = await fetch(`${base}/`, { headers, signal: AbortSignal.timeout(15000) })
+  const html = await page.text()
+  const urls = pageBundleUrls(html)
+  const failed = []
+  let ok = 0
+  for (const url of urls) {
+    try {
+      const res = await fetch(`${base}${url}`, { headers, signal: AbortSignal.timeout(30000) })
+      // 自检只需要确认完整下载成功，不解析脚本；大 bundle 逐块丢弃，避免每个实例都再攒一份。
+      if (res.body) for await (const _chunk of res.body) { /* 读完仍能发现中途断开的响应 */ }
+      if (res.status === 200) ok += 1
+      else failed.push({ url, status: res.status })
+    } catch (error) {
+      failed.push({ url, status: 0, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return { origin: base, total: urls.length, ok, failed }
+}
+
+/**
+ * 启动 CPU 账本：正常启动时由 perf/plugin-profile.mjs 在启动窗口内采样写入，这里只读。
+ * 记录不存在时返回 missing，页面据此显示「重启一次后再看」。
+ */
+async function pluginProfileReport(version, profile) {
+  const file = join(APP_DIR, 'plugin-profile', `${version}@${profile}.json`)
+  try {
+    const report = JSON.parse(await readFile(file, 'utf8'))
+    return { ...report, file }
+  } catch {
+    return { version, profile, missing: true, packages: [], native: [], entries: [] }
+  }
+}
+
+/**
+ * 从 app 页面 HTML 里挑出客户端插件包的地址。
+ *
+ * dsh 0.1.7 起页面里写的是**相对地址**（`plugins/…`，没有前导斜杠），0.1.6 及以前是
+ * `/plugins/…`。只认绝对地址的话，0.1.7 上会一条都抓不到，然后自检报「0 个全部正常」——
+ * 既没检到东西、又盖住了真正的加载失败（issue #24 的附带发现）。两种都认，统一成绝对路径。
+ * @returns {string[]} 去重后的绝对路径
+ */
+export function pageBundleUrls(html) {
+  const urls = new Set()
+  for (const match of String(html).matchAll(/(?:^|["'\s(=,])(\.?\/?plugins\/[^"'\s<>)]+)/gm)) {
+    const raw = match[1].replaceAll('&amp;', '&')
+    urls.add(raw.startsWith('/') ? raw : `/${raw.replace(/^\.\//, '')}`)
+  }
+  return [...urls]
+}
+
+/** 启动成功后异步自检并把结论写进状态（失败不影响运行中的实例）。 */
+async function selfCheckPage(url, version) {
+  const match = /^http:\/\/127\.0\.0\.1:(\d+)\/\?token=(\S+)/.exec(String(url || ''))
+  if (!match) return
+  try {
+    const result = await checkWebPage(`http://127.0.0.1:${match[1]}`, match[2])
+    lastHealth = {
+      at: Date.now(),
+      version,
+      url,
+      total: result.total,
+      ok: result.ok,
+      failed: result.failed.slice(0, 8),
+    }
+    if (result.total === 0) {
+      // 一条都没抓到＝这次自检没得出结论，别写成「0 个全部正常」骗自己（dsh 换过引用方式）
+      pushLog('页面自检：没在页面里找到客户端插件包引用（dsh 可能换了引用方式），这次没得出结论')
+    } else if (result.failed.length) {
+      pushLog(`页面自检：${result.ok}/${result.total} 个客户端插件包正常，${result.failed.length} 个失败`)
+      for (const item of result.failed.slice(0, 5)) pushLog(`[自检] HTTP ${item.status || '-'} ${item.url.slice(0, 160)}`)
+    } else {
+      pushLog(`页面自检：${result.total} 个客户端插件包全部正常`)
+    }
+    await emitState()
+  } catch (error) {
+    pushLog(`页面自检没跑成：${error instanceof Error ? error.message : error}`)
+  }
+}
+
+/** 起一个 web 子进程并等到它打印就绪 URL；失败时把子进程输出尾巴留给 AI 当证据。 */
+async function bootOnce(ver, prof, onStarted) {
+  const startedAt = performance.now()
+  await mkdir(homeDir(), { recursive: true })
+  const alongside = instances.size > 0
+  const pinned = pinnedPort(ver, prof)
+  const automatic = remembersAutoPort(prof, pinned)
+  const remembered = automatic ? await rememberedPort(ver, prof) : { port: 0, key: '' }
+  const reused = remembered.port
+  if (pinned && !(await portAvailable(pinned))) {
+    // 只说问题、不拦着：占着它的可能是用户马上要关掉的东西，也可能只是 Windows 的
+    // TIME_WAIT。真起不来时下面那条 catch 会把话说清楚。
+    pushLog(`固定端口 ${pinned} 现在被占用，这次启动多半会失败`)
+  }
+  pushLog(`启动 ${ver} · profile ${prof}${lanBindActive() ? ' · Web 绑定 局域网（dsh 仍绑 127.0.0.1，局域网经启动器代理）' : ''}${pinned ? ` · 固定端口 ${pinned}` : ''}${alongside ? '（与已在跑的实例并存）' : ''}`)
+  if (reused) {
+    pushLog(remembered.key === `${ver}@${prof}`
+      ? `复用自动端口：${ver}@${prof} → ${reused}`
+      : `复用自动端口：${remembered.key} → ${reused}（沿用换版本前的端口，页面里的本地状态才留得住）`)
+  }
+  assertStartupActive()
+  const diagnosticContext = {
+    attemptId: randomBytes(16).toString('hex'),
+    version: ver,
+    profile: prof,
+    home: homeDir(),
+    fingerprint: profileFingerprint(homeDir(), prof),
+  }
+  const key = instanceKey(ver, prof)
+  if (instanceLinks.get(key)?.pending().length) throw new Error('仍有重启中的实例，请先停止这个环境')
+  instanceLinks.get(key)?.revoke()
+  const home = homeDir()
+  const instanceLink = await createInstanceLink({
+    entry: bootEntry(ver, prof), profile: prof, profileArgIndex: bootEntry(ver, prof) === RESERVED_BOOT ? 1 : 0, timeoutMs: START_TIMEOUT_MS,
+    onDispose: () => { if (instanceLinks.get(key) === instanceLink) instanceLinks.delete(key) },
+    onSuccessor: child => launchScope.run({ home }, () => {
+      if (instanceLinks.get(key) !== instanceLink || shuttingDown) { child.kill('SIGKILL'); return }
+      const successor = attachProcess(ver, prof, child, diagnosticContext, instanceLink)
+      void emitState()
+      void waitUntilReady(successor, ver).then(async ({ url }) => {
+        if (automatic) await rememberAutoPort(ver, prof, url)
+        lastHealth = null
+        await emitState()
+      }).catch(error => pushLog(error.message))
+    }),
+  })
+  Object.assign(instanceLink, { home, version: ver, profile: prof })
+  instanceLinks.set(key, instanceLink)
+  let child
+  try {
+    assertStartupActive()
+    child = spawnDsh(ver, bootArgs(prof, pinned || reused), prof, { diagnosticContext, pluginProfile: true, instanceLink })
+  } catch (error) { instanceLink.revoke(); throw error }
+  instanceLink.bind(child)
+  const spawnAt = performance.now()
+  const proc = attachProcess(ver, prof, child, diagnosticContext, instanceLink)
+  onStarted?.(proc)
+  await emitState()
+  try {
+    const result = await waitUntilReady(proc, ver)
+    if (automatic) await rememberAutoPort(ver, prof, result.url)
+    // 分清启动器准备、子进程输出就绪地址、管理器确认三段，避免把地址可用误当成会话首屏。
+    const readyAt = proc.readyAt || performance.now()
+    proc.startupMs = Math.round(readyAt - spawnAt)
+    const confirmedAt = performance.now()
+    const prepareMs = Math.round(spawnAt - startedAt)
+    const readyMs = Math.round(readyAt - spawnAt)
+    const confirmMs = Math.round(confirmedAt - readyAt)
+    recordLaunchRun(launchScope.getStore()?.launchId, {
+      at: Date.now(),
+      version: ver,
+      profile: prof,
+      totalMs: Math.round(confirmedAt - startedAt),
+      prepareMs,
+      readyMs,
+      confirmMs,
+      firstOutputMs: proc.firstOutputAt ? Math.round(proc.firstOutputAt - spawnAt) : null,
+      // 启动结算时读一次子进程 RSS：进程级常驻，够用的“大概”
+      startupRssMB: readProcessRssMB(proc.child?.pid),
+    })
+    pushLog(`启动耗时 ${ver}/${prof}：准备 ${prepareMs}ms，子进程就绪地址 ${readyMs}ms，确认 ${confirmMs}ms，总计 ${Math.round(confirmedAt - startedAt)}ms`)
+    // 钉了端口却没落到上面（额外参数里另有 --port，或 dsh 自己顺延了）：如实说一句，
+    // 否则用户以为存下来的地址还有效
+    if (pinned && urlPortOf(result.url) !== pinned) {
+      pushLog(`固定端口 ${pinned} 没拿到，这次落在 ${String(result.url).replace(/([?&]token=)[^\s&]+/g, '$1***')}`)
+    }
+    lastHealth = null
+    if (failureIsFor(ver, prof)) lastFailure = null
+    await emitState()
+    void selfCheckPage(result.url, ver)
+    return result
+  } catch (error) {
+    const conflict = pinned ? describePortConflict(pinned, proc) : ''
+    const failure = {
+      at: Date.now(),
+      version: ver,
+      profile: prof,
+      home: homeDir(),
+      message: conflict || (error instanceof Error ? error.message : String(error)),
+      exit: proc.exit,
+      tail: (proc.tail || []).slice(-120),
+      diagnosis: proc.diagnosis.report(),
+    }
+    failure.binding = bindDiagnosis(diagnosticContext, failure.diagnosis)
+    lastFailure = failure
+    if (conflict) {
+      // 端口冲突时说清是哪个端口、谁占着——这正是固定端口最可能出的岔子
+      const wrapped = new Error(conflict)
+      wrapped.failure = failure
+      throw wrapped
+    }
+    try {
+      error.failure = failure
+    } catch {
+      // 非 Error 对象就算了
+    }
+    throw error
+  } finally {
+    claimedAutoPorts.delete(reused)
+  }
+}
+
+/**
+ * 启动某个「版本 × profile」。多开：已经在跑的那个组合不会被动，新组合在旁边另起一个
+ * （同一组合重复点启动只会拿回已经在跑的那个）。
+ */
+async function startNow(version, profile = PROFILE_NAME, onStarted) {
+  const ver = safeVersion(version)
+  const prof = safeProfile(profile)
+  // 保留名（desktop）也能起：入口换成 RESERVED_BOOT，见 CLI_BLOCKED_PROFILES
+  if (!listProfiles().includes(prof)) {
+    throw new Error(`profile ${prof} 不存在（先用自带模板名起一次，或把装好的 profile 目录放进 .dsh/profiles）`)
+  }
+  const existing = instances.get(instanceKey(ver, prof))
+  if (existing?.status === 'running' && existing.url) {
+    return { url: existing.url }
+  }
+  if (existing?.status === 'starting') {
+    return waitUntilReady(existing, ver)
+  }
+  if (existing?.status === 'stopping') {
+    // 上一个实例还在停（另一处 stop 正进行，或它没在预期时间内退出）：等它真退出再起新的，
+    // 否则两份 dsh 会抢同一份 profile——插件文件被占用、端口冲突都是这么来的。
+    if (!(await waitExit(existing.child, STOP_EXIT_TIMEOUT_MS + STOP_KILL_GRACE_MS))) {
+      throw new Error(`${ver}/${prof} 正在停止且尚未退出，请稍后再启动`)
+    }
+  }
+  const config = await loadConfig()
+  if (!listedVersions(config).includes(ver)) throw new Error(`${ver} 未安装`)
+  if (!existsSync(binPath(ver))) throw new Error('找不到官方入口 lib/bin.js')
+  return bootOnce(ver, prof, onStarted)
+}
+
+/** 一次启动尝试里最多按错误自动禁用几个插件（避免连环禁用不可收拾）。 */
+const MAX_AUTO_DISABLE = 3
+/** 最近一次按错误自动禁用的插件（管理页显示 + 一键恢复）。 */
+let lastAutoFix = null
+const autoFixForHome = () => lastAutoFix?.home === homeDir() ? lastAutoFix : null
+/** 最近一次「安全启动」（整份补丁层备份 + 摘掉第三方 bundle），管理页显示 + 一键还原。 */
+let lastRecovery = null
+
+/**
+ * 管理页的恢复档载荷：最近一次结果 + profile 里现存的补丁层备份。
+ * 内存里的那条只在本次管理器进程里有效；重启后从补丁层备份的侧车推回来，
+ * 否则「安全启动移走了配置」这个事实会跟着进程一起消失（#88）。
+ */
+function recoveryPayload(profile = PROFILE_NAME) {
+  const dir = profileDirOf(profile)
+  const backups = listPatchBackups(dir)
+  const remembered = lastRecovery?.profile === profile && lastRecovery.home === homeDir() ? lastRecovery : null
+  const durable = remembered ? null : latestRecovery(dir)
+  const last = remembered || (durable
+    ? { at: durable.at, home: homeDir(), profile, backup: durable.backup, dropped: durable.dropped, warning: null }
+    : null)
+  return { profile, home: homeDir(), last, backups }
+}
+
+/**
+ * 这个 dsh 版本会不会自己隔离「可选插件启动失败」——0.1.7-rc.1 起会
+ * （release notes：可选插件启动失败时其余插件仍可运行，只有必需插件失败才退出；
+ * 并把分类诊断写进日志文件、在插件页给出启停入口）。
+ * 那种版本上启动器不该再按 stdout 正则去改用户的补丁层：既多余，也可能误伤。
+ */
+export function dshToleratesOptionalFailures(version) {
+  const parsed = parseVer(version)
+  const since = parseVer('0.1.7-rc.1')
+  return Boolean(parsed) && Boolean(since) && cmpVer(parsed, since) >= 0
+}
+
+/**
+ * 兼容模式：启动输出点名了某个插件行加载失败时，把该行写进补丁层禁用。
+ * 只信任错误的原始输出（failed to import loader entry <行> (<包>)），官方组件不动。
+ * @returns 是否改动了配置（改动后上层立刻重试启动）。
+ */
+async function autoDisableFailedPlugins(error, already, profile = PROFILE_NAME) {
+  const settings = await loadSettings()
+  if (settings.autoDisablePlugins === false) return false
+  // 补丁层写在出事那份 profile 自己头上：多开下别的 profile 正跑着，不能改错文件
+  const dir = profileDirOf(profile)
+  const failure = error?.failure || lastFailure
+  // 新版本 dsh 自己扛得住可选插件失败，启动器就别替它做决定（原因见 dshToleratesOptionalFailures）
+  const version = failure?.version || primaryInstance()?.version || ''
+  if (dshToleratesOptionalFailures(version)) {
+    pushLog(`[兼容] ${version} 的 dsh 会自己隔离出问题的可选插件，本次不自动禁用；失败原因看它自己的插件页/日志`)
+    return false
+  }
+  const text = `${failure?.message || ''}\n${(failure?.tail || []).join('\n')}`
+
+  // 禁掉一个加载行并记账；返回是否真的动手了（没改动就别重试，免得打转）
+  const tryDisable = async (id, name, note) => {
+    try {
+      // 改补丁层前拿 profile 写独占：与「安全启动」/还原互斥，别互相踩
+      const result = await withProfileLock(dir, () => disableRowId(dir, id))
+      if (!result.changed) return false
+      pushLog(`[兼容] ${note}，已写入 cordis.patch.yml 禁用「${id}」，重试启动…`)
+      already.add(id)
+      // name 会原样显示在「启动时自动禁用了：…」里，note 只进日志
+      lastAutoFix = {
+        at: Date.now(),
+        home: homeDir(),
+        version: failure?.version || null,
+        plugins: [...(autoFixForHome()?.plugins || []), { name, id }],
+      }
+      await emitState()
+      return true
+    } catch (error2) {
+      pushLog(`[兼容] 自动禁用「${id}」失败：${error2 instanceof Error ? error2.message : error2}`)
+      return false
+    }
+  }
+
+  // 一、报错直接点名了某个加载行
+  for (const row of parseFailedRows(text)) {
+    if (already.has(row.id)) continue
+    if (/^@deepseek-ai\//.test(row.pkg)) continue
+    const owner = ownerOfRow(dir, row.id)
+    if (owner && /^@deepseek-ai\//.test(owner)) continue
+    if (await tryDisable(row.id, row.pkg, `${row.pkg} 的加载行「${row.id}」加载失败`)) return true
+  }
+
+  // 二、形状解析没命中时换个方向：顶层命中的可能是个核心 loader，出问题的插件藏在
+  //     cause 里（见 pluginsNamedInFailure 的说明）。拿已装插件的名字去报错里找，
+  //     按出现顺序一个个试，每次只禁一个再重试。
+  for (const plugin of pluginsNamedInFailure(dir, text)) {
+    const id = plugin.ids.find((rowId) => !already.has(rowId))
+    if (!id) continue
+    if (await tryDisable(id, plugin.name, `报错点名了 ${plugin.name}`)) return true
+  }
+  return false
+}
+
+/**
+ * 启动失败 → 自动修复 → 重试（兼容模式），直到成功或无法再修。
+ * 先试禁用出问题的插件行，再试重建 profile 依赖（两者各只做一次，避免打转）。
+ * 修复全部落在这次启动的 profile 自己头上（多开下别的 profile 不能被顺手改掉）。
+ */
+async function startWithRepair(version, profile = PROFILE_NAME) {
+  lastAutoFix = null
+  // 同一个组合上一次的失败到此作废，页面上那条「启动失败」跟着收掉
+  if (failureIsFor(version, profile)) {
+    lastFailure = null
+    await emitState()
+  }
+  const autoDisabled = new Set()
+  let depsRepaired = false
+  let lastError
+  // 每次启动都补齐 profile 的 .npmrc：插件市场的安装也会走这个文件，
+  // 早于任何一次 add 就有这行，市场里点安装才不会撞上 peer 求交那个坑。
+  // 只对当前 profile 做——起别的 profile 不动它的文件，人家可能就是故意留空的
+  if (profile === PROFILE_NAME) await ensureProfileNpmrc(profile).catch(() => {})
+  // 启动前给 profile 的配置层留一份快照：插件装崩、补丁写坏时能退回到这次启动前的样子。
+  // 只存配置层（几十 KB），node_modules 不动；内容没变时 snapshotProfileConfig 会跳过。
+  // 快照失败不拦启动——备份是保险，不是启动的前提。
+  await snapshotProfileConfig(profile).catch((error) => {
+    pushLog(`[备份] Profile ${profile} 快照失败：${error instanceof Error ? error.message : error}`)
+  })
+  for (;;) {
+    try {
+      return await startNow(version, profile)
+    } catch (error) {
+      assertStartupActive()
+      if (error?.code === 'STARTUP_CANCELLED') throw error
+      lastError = error
+      pushLog(`启动失败：${error instanceof Error ? error.message : error}`)
+      if (autoDisabled.size < MAX_AUTO_DISABLE && await autoDisableFailedPlugins(error, autoDisabled, profile)) {
+        continue
+      }
+      if (!depsRepaired && await repairProfileDeps(version, error, profile)) {
+        depsRepaired = true
+        continue
+      }
+      break
+    }
+  }
+  // 没走到拉起子进程那一步的失败（未安装、找不到入口）也记下来；托盘里点的启动没有
+  // 页面在等这个请求的结果，只能靠状态把原因带过去
+  lastFailure = lastError?.failure || {
+    at: Date.now(),
+    version: String(version ?? ''),
+    profile,
+    home: homeDir(),
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+    exit: null,
+    tail: [],
+  }
+  // 这些失败没经过 bootOnce；同样挂回请求的 Error，让当前页面立即收到自己的失败信息。
+  try { lastError.failure = lastFailure } catch { /* 非 Error 对象仍保留状态里的记录 */ }
+  await emitState().catch(() => {})
+  throw lastError
+}
+
+// 不同环境可以同时加载；同一环境仍串行，避免两个版本同时初始化或修复同一份配置。
+const startChains = new Map()
+
+async function start(version, profile) {
+  const name = safeProfile(profile || PROFILE_NAME)
+  const key = profileKey(name)
+  const previous = startChains.get(key) || Promise.resolve()
+  const run = previous.then(async () => {
+    assertStartupActive()
+    if (optimizingVersion === version) throw new Error('正在优化此版本的依赖，请稍后再启动')
+    if (packInstalling) throw new Error('正在安装整合包，结束后再启动 DSH')
+    if (maintainingProfiles.has(key)) throw new Error(`profile「${name}」正在修改，稍后再启动`)
+    startingProfiles.add(key)
+    try {
+      return await startWithRepair(version, name)
+    } finally {
+      startingProfiles.delete(key)
+    }
+  })
+  const settled = run.then(() => {}, () => {}).finally(() => {
+    if (startChains.get(key) === settled) startChains.delete(key)
+  })
+  startChains.set(key, settled)
+  return run
+}
+
+export async function launchInstalled() {
+  const live = primaryInstance()
+  if (live?.status === 'running' && live.url) {
+    return { version: live.version, url: live.url }
+  }
+  if (live?.status === 'starting') {
+    const result = await launchScope.run({ home: live.home }, () => start(live.version, live.profile))
+    return { version: live.version, url: result.url }
+  }
+  const installed = listedVersions(await loadConfig())
+  if (!installed.length) return { version: null, url: null }
+  const version = installed[0]
+  const result = await start(version)
+  return { version, url: result.url }
+}
+
+/**
+ * 重启：多开下把在跑的实例都重启一遍（每个还用它自己的版本和 profile），一个都没跑就起一个。
+ * 某个起不来不拦着后面的，但错误要往上抛——页面得知道有实例没回来。
+ */
+export async function restartInstalled() {
+  const targets = instanceList().map((proc) => ({ version: proc.version, profile: proc.profile, home: proc.home }))
+  if (!targets.length) return launchInstalled()
+  await stop()
+  let last = null
+  let failure = null
+  const results = await Promise.allSettled(targets.map(({ version, profile, home }) =>
+    launchScope.run({ home }, () => start(version, profile))))
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'fulfilled') last = { version: targets[index].version, profile: targets[index].profile, url: result.value.url }
+    else failure = failure || result.reason
+  }
+  if (failure) throw failure
+  return last
+}
+
+export function setHost(next) {
+  host = { ...host, ...next }
+  // 外壳自更新的进度/状态变化直接推给页面；服务在 Electron 主进程里，和 updater 同进程。
+  if (typeof next.onShellUpdateState === 'function') {
+    next.onShellUpdateState((state) => emit('shellUpdate', state))
+  }
+}
+
+/**
+ * dsh 自带的 profile 模板名（见 @deepseek-ai/dsh-app-boot 的 PROFILE_TEMPLATES）：
+ * 这些名字首次使用时 dsh 会自动初始化。其余名字必须先在磁盘上存在（目录里有
+ * package.json），否则 dsh 会直接拒绝启动——所以设置页只让人从可用列表里挑。
+ */
+const TEMPLATE_PROFILES = ['web', 'headless', 'acp', 'sdk', 'sdk-minimal']
+
+/**
+ * 可切换的 profile：磁盘上已初始化的 + dsh 自带模板名 + 当前值。
+ * 前导点开头的目录是启动器自己的内部目录（保留名 profile 的别名，见 ensureProfileAlias），不算 profile。
+ */
+export function listProfiles(root = join(homeDir(), 'profiles')) {
+  // 只列磁盘上真实存在的档案（目录里有清单才算）。官方模板名不再无条件种进来——
+  // 模板目录清掉后还列着，插件页会留一张「0 个插件」的空壳卡片。
+  // 默认 profile 始终在：首次启动时 dsh 会按模板自动初始化它。
+  const names = new Set()
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      if (existsSync(join(root, entry.name, 'package.json'))) names.add(entry.name)
+    }
+  } catch { /* 还没有 profiles 目录 */ }
+  if (PROFILE_NAME) names.add(PROFILE_NAME)
+  return [...names].sort()
+}
+
+/** 复制清单与配置后重装依赖，不能直接复制 pnpm 链接，否则副本仍指向原环境的 store。 */
+/** 改名要搬同一份依赖；Windows junction 常用绝对目标，直接 rename 会把插件链接留在旧目录。 */
+async function renameProfile(profile, nextName) {
+  const from = safeProfile(profile)
+  const name = safeProfile(nextName)
+  if (from.startsWith('.') || from.toLowerCase() === 'node_modules' || CLI_BLOCKED_PROFILES.has(from.toLowerCase())) throw new Error('系统环境不能重命名')
+  if (name.startsWith('.') || name.toLowerCase() === 'node_modules' || TEMPLATE_PROFILES.includes(name.toLowerCase()) || CLI_BLOCKED_PROFILES.has(name.toLowerCase())) throw new Error('这个名称是系统保留名称，请换一个 Profile 名称')
+  const original = profileDirOf(from)
+  const target = profileDirOf(name)
+  if (!existsSync(join(original, 'package.json')) || lstatSync(original).isSymbolicLink()) throw new Error('只能重命名已初始化的 Profile 目录')
+  if (from === name) return { ok: true, renamedProfile: name, ...packsPayload() }
+  const root = dirname(original)
+  const home = homeDir()
+  const sameHome = (left) => fileManager.samePath(left, home)
+  const targetKey = profileKey(name)
+  let moved = false
+  let targetHeld = false
+  try {
+    await withIdleProfile(from, async () => {
+      if (readdirSync(root).some((entry) => entry.toLowerCase() === name.toLowerCase())) throw new Error(`Profile「${name}」已存在`)
+      if (startingProfiles.has(targetKey) || maintainingProfiles.has(targetKey) || instanceList().some((proc) => proc.profile === name && sameHome(proc.home))) throw new Error('正在修改环境，等操作结束再试')
+      maintainingProfiles.add(targetKey)
+      targetHeld = true
+      const links = []
+      const writes = []
+      const rebase = (path) => {
+        if (!isAbsolute(path)) return path
+        const rel = relative(original, path)
+        return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) ? join(target, rel) : path
+      }
+      const scan = (dir) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const path = join(dir, entry.name)
+          if (entry.isSymbolicLink()) {
+            const before = readlinkSync(path)
+            const after = rebase(before)
+            if (after !== before) {
+              let directory = true
+              try { directory = statSync(path).isDirectory() } catch {}
+              links.push({ path: join(target, relative(original, path)), before, after, type: directory ? fileManager.directoryLinkType : 'file' })
+            }
+          } else if (entry.isDirectory()) scan(path)
+        }
+      }
+      scan(original)
+      const rewrite = (path, content) => {
+        const before = existsSync(path) ? readFileSync(path) : null
+        writes.push({ path, before })
+        mkdirSync(dirname(path), { recursive: true })
+        writeFileSync(path, content)
+      }
+      const changedLinks = []
+      const packFile = join(packDataDir(), 'packs', 'installed.json')
+      try {
+        renameSync(original, target)
+        moved = true
+        for (const link of links) {
+          changedLinks.push(link)
+          unlinkSync(link.path)
+          symlinkSync(link.after, link.path, link.type)
+        }
+        const manifestFile = join(target, 'package.json')
+        const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
+        if (manifest.name === `dsh-profile-${from}`) manifest.name = `dsh-profile-${name}`
+        for (const key of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+          for (const [pkg, spec] of Object.entries(manifest[key] || {})) {
+            // file:/link:/portal: 都按同一套路径语义搬（相对路径跟着新目录走，指向旧目录的绝对路径改到新目录）
+            const local = typeof spec === 'string' ? /^(file|link|portal):(.+)$/.exec(spec) : null
+            if (local) manifest[key][pkg] = `${local[1]}:${rebase(local[2])}`
+          }
+        }
+        rewrite(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`)
+        // pnpm 的元数据和命令 shim 也可能记着绝对目录；只替换本 Profile 的路径前缀。
+        const pathText = (text) => {
+          for (const [before, after] of [[original, target], [original.replaceAll('\\', '/'), target.replaceAll('\\', '/')], [original.replaceAll('\\', '\\\\'), target.replaceAll('\\', '\\\\')]]) {
+            text = text.split(`${before}/`).join(`${after}/`).split(`${before}\\`).join(`${after}\\`).split(`${before}"`).join(`${after}"`).split(`${before}'`).join(`${after}'`)
+          }
+          return text
+        }
+        const bin = join(target, 'node_modules', '.bin')
+        const metadata = [join(target, 'pnpm-lock.yaml'), join(target, 'node_modules', '.modules.yaml'), ...(existsSync(bin) ? readdirSync(bin).map((entry) => join(bin, entry)) : [])]
+        for (const file of metadata) {
+          if (!existsSync(file) || !lstatSync(file).isFile()) continue
+          const before = readFileSync(file, 'utf8')
+          const after = pathText(before)
+          if (after !== before) rewrite(file, after)
+        }
+        const installed = readPackState(packDataDir())
+        const prefix = `profiles/${from}/`
+        const renamedPacks = installed.packs.map((record) => {
+          if (record.profile !== from) return record
+          const files = (record.files || []).map((item) => {
+            if (!item.rel.startsWith(prefix)) return item
+            const rel = `profiles/${name}/${item.rel.slice(prefix.length)}`
+            // 撤销记录与备份路径一起迁移，卸载仍能还原改名前的配置。
+            if (item.existed) rewrite(join(record.backupDir, 'files', rel), readFileSync(join(record.backupDir, 'files', item.rel)))
+            return { ...item, rel }
+          })
+          return { ...record, profile: name, files }
+        })
+        if (installed.packs.some((record) => record.profile === from)) {
+          writes.push({ path: packFile, before: existsSync(packFile) ? readFileSync(packFile) : null })
+          writePackState(packDataDir(), { packs: renamedPacks })
+        }
+        const ports = (value) => Object.fromEntries(Object.entries(safeInstancePorts(value)).map(([key, port]) => [key.endsWith(`@${from}`) ? `${key.slice(0, key.indexOf('@'))}@${name}` : key, port]))
+        const saved = await saveSettings((current) => ({
+          launchPresets: safeLaunchPresets(current.launchPresets).map((entry) => entry.profile === from && sameHome(entry.dshHome || defaultHome()) ? { ...entry, profile: name } : entry),
+          ...(sameHome(defaultHome()) ? { profile: current.profile === from ? name : current.profile, instancePorts: ports(current.instancePorts) } : {}),
+          environmentPorts: Object.fromEntries(Object.entries(safeEnvironmentPorts(current.environmentPorts)).map(([dir, value]) => [dir, sameHome(dir) ? ports(value) : value])),
+          autoPorts: Object.fromEntries(Object.entries(safeEnvironmentPorts(current.autoPorts)).map(([dir, value]) => [dir, sameHome(dir) ? ports(value) : value])),
+        }))
+        INSTANCE_PORTS = safeInstancePorts(saved.instancePorts)
+        ENVIRONMENT_PORTS = liveEnvironmentPorts(saved)
+        if (sameHome(defaultHome())) {
+          PROFILE_NAME = saved.profile
+        }
+      } catch (error) {
+        // 配置落盘失败也要回到旧名称，不能留下半改名的环境。
+        for (const { path, before } of writes.reverse()) {
+          if (before) writeFileSync(path, before)
+          else if (existsSync(path)) unlinkSync(path)
+        }
+        for (const link of changedLinks.reverse()) {
+          try { unlinkSync(link.path) } catch (error) { if (error.code !== 'ENOENT') throw error }
+          symlinkSync(link.before, link.path, link.type)
+        }
+        if (moved) { renameSync(target, original); moved = false }
+        throw error
+      }
+    })
+  } finally {
+    // 原锁文件跟着目录搬走，等 withIdleProfile 关闭句柄后在新位置清理。
+    if (moved) { try { unlinkSync(join(target, 'lock')) } catch {} }
+    if (targetHeld) maintainingProfiles.delete(targetKey)
+  }
+  pluginUpdateCache.at = 0
+  if (lastAutoFix?.home === home && lastAutoFix.profile === from) lastAutoFix.profile = name
+  pushLog(`已重命名 Profile「${from}」为「${name}」`)
+  await emitState()
+  return { ok: true, ...packsPayload(), renamedProfile: name, profile: name, state: await snapshot(), webProfiles: listProfiles().filter((profile) => profileBootsWebIn(home, profile)) }
+}
+
+/**
+ * 清单里的本地依赖（file: / link: / portal:）跟着 Profile 换位置。
+ *
+ * 相对路径以清单所在目录为基准——复制到另一个 Profile（甚至另一个用户目录）后，
+ * 原样的 `link:../../plugins/x` 会指到不存在的目录，插件直接断。
+ * 目标在旧目录里面的改成新目录下的对应位置；在旧目录外面的保留绝对路径，
+ * 这样跨 home 的工作区仍指回原处，而不是复制完就坏。
+ */
+export function rebaseLocalDeps(manifest, fromDir, toDir) {
+  let changed = false
+  for (const key of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    for (const [pkg, spec] of Object.entries(manifest?.[key] || {})) {
+      const local = typeof spec === 'string' ? /^(file|link|portal):(.+)$/.exec(spec) : null
+      if (!local) continue
+      const target = isAbsolute(local[2]) ? local[2] : resolve(fromDir, local[2])
+      // 前缀要带分隔符：`dsh-profiles-old` 不算 `dsh-profiles` 下面
+      const inside = target.startsWith(`${fromDir}${sep}`)
+      // 一律写成 /：pnpm 把 file:/link: 当 URL 解析，`file:C:\x` 会把盘符吃掉
+      const nextPath = (inside ? join(toDir, relative(fromDir, target)) : target).replaceAll('\\', '/')
+      const value = `${local[1]}:${nextPath}`
+      if (value === spec) continue
+      manifest[key][pkg] = value
+      changed = true
+    }
+  }
+  return changed
+}
+
+/**
+ * 建 Profile：`source` 给了就把那份配置复制过来（插件清单、开关、MCP、补丁层），
+ * 复制完在目标环境里重装依赖。`sourceHome` 是来源所在的那个用户目录，空 = 当前环境；
+ * 可以跨用户目录复制，两个目录互不相干。
+ */
+async function createProfile(profile, source = '', sourceHome = '') {
+  const name = safeProfile(profile)
+  const from = source ? safeProfile(source) : ''
+  if (name.startsWith('.') || name.toLowerCase() === 'node_modules' || TEMPLATE_PROFILES.includes(name.toLowerCase()) || CLI_BLOCKED_PROFILES.has(name.toLowerCase())) {
+    throw new Error('这个名称是系统保留名称，请换一个 Profile 名称')
+  }
+  // 目标永远是「当前作用域」这一份；来源可以另指一个用户目录。
+  const home = homeDir()
+  const fromHome = from ? safeDshHome(sourceHome) || home : ''
+  const root = join(home, 'profiles')
+  await mkdir(root, { recursive: true })
+  if (readdirSync(root).some((entry) => entry.toLowerCase() === name.toLowerCase())) throw new Error(`Profile「${name}」已存在`)
+  const original = from ? join(fromHome, 'profiles', from) : ''
+  if (from && !existsSync(join(original, 'package.json'))) throw new Error(`Profile「${from}」尚未初始化，不能复制`)
+  const target = join(home, 'profiles', name)
+  const targetKey = `${home}\0${name}`
+  if (maintainingProfiles.has(targetKey)) throw new Error(`profile「${name}」正在修改，稍后再试`)
+  // 锁的是来源那一份（同目录复制时就是自己）：来源被删/被改到一半，复制出来的是坏环境。
+  await withIdleProfileIn(from ? fromHome : home, from || name, async () => {
+    if (from) maintainingProfiles.add(targetKey)
+    const staging = mkdtempSync(join(root, '.dsh-profile-'))
+    let created = false
+    try {
+      if (from) {
+        await cp(original, staging, {
+          recursive: true,
+          filter: (path) => !['node_modules', '.git', 'lock'].includes(basename(path)) && !lstatSync(path).isSymbolicLink(),
+        })
+      }
+      const manifest = from ? JSON.parse(await readFile(join(staging, 'package.json'), 'utf8')) : profileSkeleton(name)
+      manifest.name = `dsh-profile-${name}`
+      manifest.private = true
+      // file:/link:/portal: 这类本地依赖以原环境为基准解析，搬目录后不能指到另一份不存在的插件。
+      if (from) rebaseLocalDeps(manifest, original, target)
+      await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+      // file: 依赖的路径已经改变，旧锁文件不能继续锁住原目录。
+      if (from) await rm(join(staging, 'pnpm-lock.yaml'), { force: true })
+      if (!existsSync(join(staging, 'pnpm-workspace.yaml'))) await writeFile(join(staging, 'pnpm-workspace.yaml'), 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+      // 独占建目录，避免与外部进程同名创建时覆盖别人的 Profile。
+      await mkdir(target)
+      created = true
+      await cp(staging, target, { recursive: true })
+      if (['dependencies', 'devDependencies', 'optionalDependencies'].some((key) => Object.keys(manifest[key] || {}).length)) {
+        await runProfileInstall(await pluginCommandVersion(name), { profile: name })
+      }
+      pushLog(from
+        ? `已复制 Profile「${from}」为「${name}」${fromHome === home ? '' : `（来源目录 ${fromHome}）`}`
+        : `已创建 Profile「${name}」`)
+    } catch (error) {
+      if (created) await rm(target, { recursive: true, force: true })
+      throw error
+    } finally {
+      await rm(staging, { recursive: true, force: true })
+      if (from) maintainingProfiles.delete(targetKey)
+    }
+  })
+  await emitState()
+  return { ok: true, createdProfile: name, ...packsPayload() }
+}
+
+/** 整合包对话框的筛选器（只有 Windows 的对话框用得上）。 */
+const PACK_FILE_FILTER_DSPACK = '整合包 (*.dspack)|*.dspack|ZIP 压缩包 (*.zip)|*.zip|所有文件 (*.*)|*.*'
+const ZIP_FILE_FILTER = 'ZIP 文件 (*.zip)|*.zip|所有文件 (*.*)|*.*'
+
+/**
+ * 下面这几个都只是在拼「要弹什么对话框」，真正怎么弹、怎么打开由 fileManager 决定
+ * （契约见 filemanager-base.js）：页面里的 `<input type="file">` 拿不到本机绝对路径，
+ * 浏览器也不给，所以这些事只能由管理页所在的本机进程来做。
+ */
+function pickDirectory(initialPath = '') {
+  return fileManager.pickDirectory(initialPath)
+}
+
+function pickPackFile({ save = false, defaultName = '' } = {}) {
+  return fileManager.pickFile({
+    save,
+    defaultName,
+    filter: PACK_FILE_FILTER_DSPACK,
+    title: save ? '导出整合包' : '选择整合包',
+  })
+}
+
+/**
+ * 选一个 ZIP（同步的导入 / 导出用）。
+ * save = true 走「保存」对话框（可以是个还不存在的文件名），否则走「打开」对话框。
+ */
+function pickFile({ save = false, name = '' } = {}) {
+  return fileManager.pickFile({
+    save,
+    defaultName: save ? (name || 'dsh-backup.zip') : '',
+    filter: ZIP_FILE_FILTER,
+    title: save ? '导出到哪个 ZIP 文件' : '选择要导入的 ZIP 文件',
+    prompt: save ? '选择保存位置' : '选择 ZIP 文件',
+  })
+}
+
+/**
+ * 在文件管理器里定位一个文件。
+ *
+ * 只放行启动器自己的产物（刚导出的包、inbox 里的临时文件）——这个接口没有鉴权，
+ * 做成「能打开任意路径」等于给本机开了个文件管理器后门。
+ */
+function revealPath(target) {
+  const value = String(target || '')
+  if (!value) throw new Error('先给一个路径')
+  if (!existsSync(value)) throw new Error('这个路径不存在')
+  const allowed = value === lastExportPath || value === packsDir() || value.startsWith(`${packsDir()}${sep}`)
+  if (!allowed) throw new Error('只支持显示整合包自己的文件')
+  return fileManager.revealPath(value)
+}
+
+function openDirectory(dir) {
+  return fileManager.openDirectory(dir)
+}
+
+/** 允许当作"本机"的主机名——打开本机页面、判断请求来源都用它。 */const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
+/** 严格解析成本机 http(s) 地址；不是就抛错（前缀正则挡不住 `/?&calc` 这种尾巴）。 */
+function assertLocalUrl(target) {
+  let parsed
+  try {
+    parsed = new URL(String(target))
+  } catch {
+    throw new Error('只能打开本机地址')
+  }
+  if (!/^https?:$/.test(parsed.protocol) || !LOCAL_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new Error('只能打开本机地址')
+  }
+  return parsed.href
+}
+
+/**
+ * Chromium 系浏览器（支持 --app= 应用窗口）的常见安装位置。
+ * 顺序即优先级：先用户的 Chrome，再 Edge（Windows 自带，兜底最稳）。
+ * DSH_CHROMIUM 可以指定一个，方便用便携版或专门指定某个浏览器。
+ */
+export function chromiumCandidates(env = process.env, platform = process.platform) {
+  if (env.DSH_CHROMIUM) return [env.DSH_CHROMIUM]
+  if (platform === 'darwin') {
+    return [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ]
+  }
+  if (platform !== 'win32') return ['google-chrome', 'chromium', 'microsoft-edge']
+  return [
+    join(env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    join(env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    join(env['ProgramFiles(x86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    join(env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    join(env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ].filter(Boolean)
+}
+
+/** 找到可用的 Chromium 就返回它的路径，否则空串（调用方退回默认浏览器）。 */
+export function findChromiumBrowser(env = process.env, platform = process.platform) {
+  return chromiumCandidates(env, platform).find((file) => Boolean(file) && existsSync(file)) || ''
+}
+
+/** 应用窗口的参数：--app=<url> 打开的是没有地址栏、没有标签栏的独立窗口。 */
+export function appWindowArgs(url) {
+  return [`--app=${String(url)}`]
+}
+
+/** 用 Chromium 的应用窗口打开网址；找不到浏览器返回 false，交给调用方兜底。 */
+function openInAppWindow(url) {
+  const browser = findChromiumBrowser()
+  if (!browser) return false
+  try {
+    execFile(browser, appWindowArgs(url), { windowsHide: true })
+    pushLog(`用浏览器独立窗口打开：${basename(browser)}`)
+    return true
+  } catch (error) {
+    pushLog(`浏览器独立窗口没打开（${error instanceof Error ? error.message : error}），改用默认浏览器`)
+    return false
+  }
+}
+
+/**
+ * 内嵌窗口模式：本进程是被 DSH.exe / DSH-X.app 的原生外壳拉起来的（它设了
+ * DSH_APP_WINDOW=1），它在 stdout 上收这一行约定标记（和 __DSH_SHOW__ 一个路子），
+ * 收到就把地址装进它自己创建的窗口里。不经过浏览器进程——这正是这个模式存在的理由：
+ * app 模式借的还是浏览器（只是没有地址栏），window 模式的窗口完全归启动器所有，
+ * 关窗口 / 托盘 / 退出都由它说了算。
+ */
+const OPEN_SIGNAL = '__DSH_OPEN__'
+
+/** 本进程是不是由原生外壳（DSH.exe / DSH-X.app）托管：只有它能开内嵌窗口。 */
+function shellWindowHost() {
+  return process.env.DSH_APP_WINDOW === '1'
+}
+
+// 旧版外壳只认识独立窗口标记；单独报告标签页能力，避免新版页面选了内部打开却没有反应。
+function internalTabsHost() {
+  return shellWindowHost() && process.env.DSH_INTERNAL_TABS === '1'
+}
+
+/**
+ * 用实例身份而不是端口标识标签：重启换端口或 token 时仍能找到原来的页面。
+ * 标题优先用启动项名称（用户认的是自己起的环境名，不是版本号）；不属于任何启动项的实例才退回「profile · 版本」。
+ */
+export function internalTabTarget(instance, name = '') {
+  return {
+    id: JSON.stringify([instance.home || '', instance.version || '', instance.profile || '']),
+    title: name || [instance.profile, instance.version].filter(Boolean).join(' · ') || 'DSH',
+    url: instance.url || '',
+    status: instance.status || 'stopped',
+    managed: true,
+  }
+}
+
+/**
+ * 按外壳能力选择独立窗口、主窗口标签或系统浏览器；源码运行与旧外壳要能正常降级。
+ */
+export function openRoute(mode, shellWindow, internalTabs = false) {
+  if (mode === 'internal' && shellWindow && internalTabs) return 'internal'
+  return mode === 'window' && shellWindow ? 'window' : 'browser'
+}
+
+/**
+ * 交给系统默认程序打开。openMode 为 app 时优先用 Chromium 的应用窗口（更像个 App、
+ * 没有地址栏），找不到 Chrome/Edge 就安静退回默认浏览器；为 window 时交给原生外壳
+ * 自己的窗口（不经过浏览器进程）。
+ *
+ * Windows 走 `cmd /c start`，而 cmd 会把这行**再解析一遍**：URL 里的 `&` 是语句
+ * 分隔符、`|<>^()%"` 各有含义，于是 `http://127.0.0.1:1/?&calc` 能直接跑起任意命令
+ * （Node 只给含空格的参数加引号，而 URL 里通常没有空格）。所以这里只放行 cmd 会
+ * 原样看待的字符——够用（本机地址就是 `http://127.0.0.1:端口/路径?k=v`），
+ * 其余一律拒绝，比在字符串上做转义可靠。
+ */
+function openExternal(target, mode = OPEN_MODE) {
+  const url = String(target)
+  if (openRoute(mode, shellWindowHost(), internalTabsHost()) === 'internal') {
+    // 启动等待页占的正是这个实例的标签位（id 与 internalTabTarget 同一套拼法）：
+    // 页面自己跳到 dsh 之后就是实例页，标签条上不会先多出一个「DSH」再被实例页挤掉。
+    const booting = new URL(url)
+    if (booting.pathname === '/booting') {
+      const version = booting.searchParams.get('version') || ''
+      const profile = booting.searchParams.get('profile') || ''
+      const home = booting.searchParams.get('home') || ''
+      host.openTab({
+        id: JSON.stringify([home, version, profile]),
+        title: booting.searchParams.get('name') || [profile, version].filter(Boolean).join(' · ') || 'DSH',
+        url,
+        status: 'starting',
+        managed: true,
+      })
+      return
+    }
+    const parsed = new URL(url)
+    const instance = instanceList().find((proc) => proc.url && new URL(proc.url).origin === parsed.origin)
+    const remoteEntry = safeLaunchPresets(loadSettingsSync().launchPresets)
+      .find((entry) => {
+        if (!entry.remote) return false
+        const runtime = remoteRuntimeStates.get(entry.id)
+        return Boolean(runtime?.url && runtime.probe?.ok !== false && new URL(runtime.url).origin === parsed.origin)
+      })
+    const tab = instance
+      ? internalTabTarget(instance, launchNameOf(instance))
+      : remoteEntry
+        ? remoteTabTarget(remoteEntry, remoteRuntimeStates.get(remoteEntry.id), remoteEntry.name)
+        : { id: parsed.origin, title: 'DSH', url, status: 'running', managed: false }
+    // 自动配对链接和常规入口同 origin 但路径不同；打开用户实际请求的一次性链接，
+    // 不能被 remoteTabTarget 里的常规 token URL 悄悄替换掉。
+    if (remoteEntry && tab.url !== url) tab.url = url
+    // 认证地址只在本机管道或同进程调用中传递；标题和实例身份都不包含 token，也不写入日志或设置。
+    host.openTab(tab)
+    return
+  }
+  // 内嵌窗口：地址交给原生外壳自己的窗口，连浏览器进程都不起（见 OPEN_SIGNAL）
+  if (openRoute(mode, shellWindowHost()) === 'window') {
+    host.openWindow(url)
+    return
+  }
+  if (mode === 'app' && /^https?:/i.test(url)) {
+    if (openInAppWindow(url)) return
+    pushLog('没找到 Chrome/Edge，改用系统默认浏览器打开')
+  }
+  // 剩下的交给系统默认程序：cmd 的元字符过滤之类的平台事项都在实现类里
+  void fileManager.openUrl(url).catch((error) => pushLog(`打开地址失败：${error?.message || error}`))
+}
+
+function openLocalUrl(target) {
+  openExternal(assertLocalUrl(target))
+}
+
+/**
+ * `/api/open` 只收“本机地址”或 DSH-X 自己管理的远程实例 origin。
+ * 远程 DSH 的 URL 带 token，不能让管理页把任意外链塞进原生标签页。
+ */
+function openManagedUrl(target, preferredMode = OPEN_MODE) {
+  const parsed = new URL(String(target))
+  if (LOCAL_HOSTS.has(parsed.hostname.toLowerCase())) {
+    openExternal(assertLocalUrl(target))
+    return
+  }
+  const managed = safeLaunchPresets(loadSettingsSync().launchPresets).some((entry) => {
+    if (!entry.remote || parsed.hostname.toLowerCase() !== entry.remote.host.toLowerCase()) return false
+    const runtimeUrl = remoteRuntimeStates.get(entry.id)?.url
+    if (!runtimeUrl) return false
+    const runtime = new URL(runtimeUrl)
+    return parsed.protocol === runtime.protocol && parsed.port === runtime.port
+  })
+  if (!managed) throw new Error('只能打开本机地址或 DSH-X 管理的远程实例')
+    openExternal(parsed.href, preferredMode)
+}
+
+/**
+ * 请求是不是来自本机。带 Origin 的只有浏览器：别的网页往 127.0.0.1 发跨站 POST 时
+ * 会带上自己的 Origin（file:// 页面则是 `null`），而这个管理页没有任何鉴权，不挡的话
+ * 任意网页都能让启动器装插件、起进程、开链接。托盘 / curl / 本机脚本不带 Origin。
+ */
+function sameSiteRequest(req) {
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    const parsed = new URL(origin)
+    return LOCAL_HOSTS.has(parsed.hostname.toLowerCase()) && (!parsed.port || Number(parsed.port) === PORT)
+  } catch {
+    return false
+  }
+}
+
+/** Host 头是不是我们自己（DNS rebinding 的请求里写的是攻击者的域名）。 */
+function isLocalHostHeader(host) {
+  if (!host) return true
+  const match = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(String(host).trim().toLowerCase())
+  if (!match) return false
+  if (!LOCAL_HOSTS.has(match[1])) return false
+  return !match[2] || Number(match[2]) === PORT
+}
+
+export { pruneDanglingLinks, pruneVersions, recordLaunchUse, snapshot, stop }
+
+/**
+ * 停止实例：版本 + profile + 目录都给就停那一个组合；只给版本就停那个版本的全部
+ * （同版本可能用不同 profile 或 DSH_HOME 各跑着一份）；都没给就全停（旧外壳兼容接口）。
+ * 指名了一个没在跑的组合不算错，什么都不做——多开下页面和状态本来就可能差一拍。
+ */
+async function stop(version, profile = '', targetHome = '') {
+  const wantedVersion = version ? safeVersion(version) : ''
+  const wantedProfile = wantedVersion && profile ? safeProfile(profile) : ''
+  const home = targetHome ? safeDshHome(targetHome) : homeDir()
+  const targets = !wantedVersion
+    ? instanceList().filter((proc) => !targetHome || proc.home === home)
+    : wantedProfile
+      ? instanceList().filter((proc) => proc.version === wantedVersion && proc.profile === wantedProfile && proc.home === home)
+      : instanceList().filter((proc) => proc.version === wantedVersion && (!targetHome || proc.home === home))
+  // helper 等待旧端口释放的间隙也要撤销能力，不能让已停止的实例在后台复活。
+  for (const [key, link] of instanceLinks) {
+    if ((!wantedVersion || link.version === wantedVersion) && (!wantedProfile || link.profile === wantedProfile)
+      && ((!wantedVersion && !targetHome) || link.home === home || (!targetHome && !wantedProfile))) {
+      // 已回连但还在等旧进程退出的继任者也要确认死亡，才能允许下一次启动占用 profile。
+      for (const child of link.pending()) targets.push({ version: link.version, profile: link.profile, home: link.home, child, instanceLink: link })
+      link.revokeAdmission()
+    }
+  }
+  if (!targets.length) return
+  for (const proc of targets) proc.status = 'stopping'
+  await emitState()
+  const stuck = []
+  await Promise.all(targets.map(async (proc) => {
+    const label = `${proc.version}/${proc.profile}`
+    if (await terminateProcess(proc)) {
+      // 'exit' 处理器会删记录，这里兜底：事件已经错过时别留下幽灵条目
+      if (instances.get(proc.key)?.child === proc.child) instances.delete(proc.key)
+      return
+    }
+    // 进程还活着就不能当真停掉了。原来这里超时后一删了之，等于把孤儿丢给系统：重启会在
+    // 同一份 profile / 端口上再起一份，就是「文件被占用」的来源。现在保留跟踪记录、把状态
+    // 退回去（页面上的停止/重启按钮还能再点一次），并把错误抛给用户。
+    stuck.push(`${label}（PID ${proc.child.pid}）`)
+    proc.status = proc.url ? 'running' : 'starting'
+  }))
+  await emitState()
+  if (stuck.length) {
+    throw new Error(`停止失败：${stuck.join('、')} 的进程没有退出，可能还占着端口或插件文件；请再试一次，或在任务管理器里结束它`)
+  }
+}
+
+async function uninstallSystem(ver) {
+  const system = detectSystemDsh()
+  if (!system || system.version !== ver) throw new Error(`${ver} 未安装`)
+  pushLog(`卸载系统 ${ver}`)
+  await rm(system.root, { recursive: true, force: true })
+  const prefix = dirname(dirname(dirname(system.root)))
+  if (!IS_WINDOWS) {
+    // POSIX 的全局包在 <prefix>/lib/node_modules，命令是 <prefix>/bin/dsh 这个符号链接。
+    // 包删掉之后它就悬空了，existsSync 会跟着链接判成不存在，所以用 lstat；也只删链接，
+    // 同名的普通文件不是 npm 装的，不碰。
+    const link = join(dirname(prefix), 'bin', 'dsh')
+    try {
+      if (lstatSync(link).isSymbolicLink()) await rm(link, { force: true })
+    } catch {
+      // 没有就算了
+    }
+    return
+  }
+  for (const name of ['dsh', 'dsh.cmd', 'dsh.ps1']) {
+    const file = join(prefix, name)
+    if (existsSync(file)) await rm(file, { force: true })
+  }
+}
+
+async function uninstall(version) {
+  const ver = safeVersion(version)
+  if (optimizingVersion === ver) throw new Error('正在优化此版本的依赖，请稍后再移除')
+  // 这个版本可能有多个 profile 的实例在跑，任何一个在都不能卸
+  if (instanceList().some((proc) => proc.version === ver)) throw new Error('请先停止再移除')
+  revokeIdleInstanceLinks(link => link.version === ver)
+  const config = await loadConfig()
+  const versions = listedVersions(config)
+  if (!versions.includes(ver)) throw new Error(`${ver} 未安装`)
+  if (isManaged(ver)) {
+    pushLog(`移除 ${ver}`)
+    await rm(versionDir(ver), { recursive: true, force: true })
+  }
+  const system = detectSystemDsh()
+  if (system?.version === ver) await uninstallSystem(ver)
+  config.versions = versions.filter((item) => item !== ver)
+  await saveConfig(config)
+  await dropInstancePorts(ver)
+  await emitState()
+}
+
+async function readJson(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > 64 * 1024 * 1024) throw new Error('请求内容过大')
+    if (req.url?.split('?')[0] === '/api/skills/preview' && size > 48 * 1024 * 1024) throw new Error('技能上传内容过大')
+    chunks.push(chunk)
+  }
+  if (!chunks.length) return {}
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
+/** MCP 检测同时跑几台；stdio 探测要起真进程，别一次全放出去。 */
+const PROBE_CONCURRENCY = 3
+/** 检测超时：默认 20s，允许页面调，夹在 2s - 120s 之间。 */
+function probeTimeout(value) {
+  const ms = Number(value)
+  if (!Number.isFinite(ms) || ms <= 0) return 20000
+  return Math.min(120000, Math.max(2000, Math.round(ms)))
+}
+
+/**
+ * 探测用的环境：把启动器自带的 node/npx 放到 PATH 最前，但**不**继承 NODE_OPTIONS——
+ * 那是启动器给 dsh 自己挂的加载钩子，塞给被测的 MCP 程序只会添乱。
+ */
+function probeEnv() {
+  const env = { ...process.env, ...RUNTIME_NODE_ENV, ...proxyEnv(), PATH: withBundledRuntime(process.env.PATH || '') }
+  delete env.NODE_OPTIONS
+  return env
+}
+
+/**
+ * MCP 状态检测：对每台服务器真起一次进程 / 真连一次端点，走 MCP initialize 握手。
+ * 结果只回给页面，不落盘——它是"现在这一下通不通"，不是配置的一部分。
+ */
+async function probeMcpServers(targets, timeoutMs, onResult) {
+  const results = new Array(targets.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, targets.length) }, async () => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= targets.length) return
+      const server = targets[index]
+      const result = server.broken
+        ? {
+          serverName: server.serverName,
+          transport: server.transport,
+          ok: false,
+          stage: 'broken',
+          detail: server.error || '条目损坏，无法检测',
+          ms: 0,
+        }
+        : await probeMcpServer(server, { timeoutMs, env: probeEnv(), cwd: profileDir(), clientName: `dsh-x ${APP_VERSION}` })
+      results[index] = result
+      onResult?.(result)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+function send(res, status, body, type = 'application/json; charset=utf-8', headers = {}) {
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
+  res.writeHead(status, {
+    'content-type': type,
+    'content-length': payload.length,
+    'cache-control': 'no-store',
+    connection: 'close',
+    ...headers,
+  })
+  res.end(payload)
+}
+
+async function exportLogs() {
+  logWriter.flush()
+  const chunks = []
+  for (const path of [`${LOG_FILE}.1`, LOG_FILE]) {
+    try {
+      chunks.push(await readFile(path, 'utf8'))
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+  return redact(chunks.length ? chunks.join('') : logs.join('\n'), secretValues)
+}
+
+/**
+ * 插件桌面 API 的能力清单（GET /api/desktop）。
+ *
+ * available 只有真外壳接上 host.desktop 时为真：浏览器模式（node start.js）和旧外壳
+ * 都没有这层能力。通知开关和外壳读的是同一份 settings.json，插件可以先看它决定
+ * 要不要退回页面内提示。
+ */
+function desktopPayload() {
+  const desktop = host.desktop
+  // 外壳的 info 坏了不该让整份能力清单失败：插件至少还能看到 available 和 capabilities。
+  let info = {}
+  try {
+    info = (desktop && typeof desktop.info === 'function' ? desktop.info() : null) || {}
+  } catch {
+    info = {}
+  }
+  const settings = loadSettingsSync()
+  return {
+    api: DESKTOP_API_VERSION,
+    available: Boolean(desktop),
+    platform: process.platform,
+    capabilities: desktop ? [...DESKTOP_CAPABILITIES] : [],
+    notifications: {
+      enabled: settings.taskNotifications !== false,
+      sound: settings.notificationSound !== false,
+    },
+    theme: typeof info.theme === 'string' ? info.theme : '',
+    versions: { core: APP_VERSION, ...(info.versions && typeof info.versions === 'object' ? info.versions : {}) },
+  }
+}
+
+async function handleApi(req, res, url) {
+  // 身份标记：端口被占用时我们要能分辨那是自己的另一个实例还是别人的程序
+  if (url.pathname === '/api/ping') {
+    send(res, 200, { app: 'dsh-x', version: APP_VERSION, port: PORT })
+    return
+  }
+  // 改状态的请求只认本机来源（浏览器会带 Origin，本机程序不会）
+  if (req.method !== 'GET' && !sameSiteRequest(req)) {
+    send(res, 403, { error: '跨站请求被拒绝' })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/remote') {
+    send(res, 200, await fetchRemote())
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/self') {
+    // refresh=1 是用户在「关于」里主动点检查更新：绕开两份缓存，重新问发布页
+    const refresh = url.searchParams.get('refresh') === '1'
+    const info = await checkSelfUpdate({ force: refresh })
+    // staged / downloading 让页面重载后也能知道下载进度：下载在服务端跑，和弹窗开不开无关
+    const app = await checkAppUpdate({ force: refresh }).catch((error) => ({ available: false, reason: 'error', error: error?.message || String(error) }))
+    send(res, 200, { ...info, npm: NPM_MODE, shell: host.shellUpdate?.state() || null, staged: stagedUpdate?.latest || '', downloading: selfDownloadInFlight, app, appStaged: stagedApp?.version || '' })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/shell-update') {
+    send(res, 200, host.shellUpdate?.state() || { status: 'disabled', current: SHELL_VERSION, latest: '', error: '' })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/shell-update/check') {
+    try {
+      send(res, 200, host.shellUpdate ? await host.shellUpdate.check() : { status: 'disabled', current: SHELL_VERSION, latest: '', error: '' })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/shell-update/download') {
+    try {
+      send(res, 200, host.shellUpdate ? await host.shellUpdate.download() : { status: 'disabled', current: SHELL_VERSION, latest: '', error: '' })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/shell-update/install') {
+    // 先响应，再停 dsh、退出，交给 electron-updater 静默安装
+    send(res, 200, { ok: true })
+    void host.shellUpdate?.install().catch((error) => pushLog(`外壳更新安装失败：${error?.message || error}`))
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/pending') {
+    send(res, 200, { update: await pendingUpdate() })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/versions/check') {
+    // refresh=1 是用户主动点「检测版本」：绕缓存；打开版本管理的静默刷新走缓存
+    const force = url.searchParams.get('refresh') === '1'
+    try {
+      const result = await checkVersionUpdates({ force })
+      // 只为主动检测记日志；静默刷新每次都记会把日志刷满
+      if (force) {
+        pushLog(result.update
+          ? `检测到新版本 ${result.updateLatest}（本机最新已装 ${result.current || '无'}）`
+          : `版本检测：远程最新 ${result.latest || '未知'}，本机已装 ${result.current || '无'}`)
+      }
+      send(res, 200, result)
+    } catch (error) {
+      // 与启动时的静默容忍不同：用户点了检测，连不上就要说出来，不能装作「没有更新」
+      const detail = describeFetchError(error, currentRegistry())
+      const message = `读不到远程版本，请检查网络或下载源后重试（${detail}）`
+      if (force) pushLog(`检测版本失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/tray') {
+    void refreshRemoteRuntimeStates().catch(() => {})
+    send(res, 200, trayStateText(), 'text/plain; charset=utf-8')
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/changelog') {
+    const kind = url.searchParams.get('kind') === 'self' ? 'self' : 'dsh'
+    send(res, 200, await releaseNotes(kind, url.searchParams.get('version')))
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/settings') {
+    send(res, 200, await publicSettings())
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/launch-log') {
+    const id = String(url.searchParams.get('id') || '')
+    if (!LAUNCH_ID_RE.test(id)) {
+      send(res, 400, { error: '启动项 id 不合法' })
+      return
+    }
+    const file = join(LAUNCH_LOG_DIR, `launch-${id}.log`)
+    let text = ''
+    let at = null
+    try {
+      text = readFileSync(file, 'utf8')
+      at = statSync(file).mtimeMs
+    } catch {
+      // 还没启动过：空日志，页面显示提示
+    }
+    const limit = 120 * 1024
+    const clipped = text.length > limit
+    if (clipped) text = text.slice(-limit)
+    let runs = []
+    try {
+      const parsed = JSON.parse(readFileSync(join(LAUNCH_LOG_DIR, `launch-${id}.json`), 'utf8'))
+      if (Array.isArray(parsed?.runs)) runs = parsed.runs.slice(0, 20)
+    } catch {
+      // 没有耗时记录：只显示日志
+    }
+    send(res, 200, { id, text, at, clipped, runs })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/launch-log/export') {
+    const id = String(url.searchParams.get('id') || '')
+    if (!LAUNCH_ID_RE.test(id)) {
+      send(res, 400, { error: '启动项 id 不合法' })
+      return
+    }
+    let text = ''
+    try {
+      text = readFileSync(join(LAUNCH_LOG_DIR, `launch-${id}.log`), 'utf8')
+    } catch {
+      send(res, 404, { error: '这个启动项还没有日志' })
+      return
+    }
+    res.setHeader('content-disposition', `attachment; filename="launch-${id}.log"`)
+    send(res, 200, text, 'text/plain; charset=utf-8')
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/logs/export') {
+    res.setHeader('content-disposition', 'attachment; filename="dsh-x-logs.txt"')
+    send(res, 200, await exportLogs(), 'text/plain; charset=utf-8')
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/state') {
+    send(res, 200, await snapshot())
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/plugin-profile') {
+    // 账本按「版本@profile」存在数据目录里；参数非法回 400，别让它拼进文件路径。
+    try {
+      const version = safeVersion(url.searchParams.get('version') || '')
+      const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+      send(res, 200, await pluginProfileReport(version, profile))
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/launch-home/profiles') {
+    const home = safeDshHome(url.searchParams.get('home')) || defaultHome()
+    const profiles = listProfiles(join(home, 'profiles'))
+    send(res, 200, { home, profiles, webProfiles: profiles.filter((name) => profileBootsWebIn(home, name)) })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/plugins/check-compatibility') {
+    try {
+      const body = await readJson(req)
+      const version = safeVersion(body.version)
+      const profile = safeProfile(body.profile || PROFILE_NAME)
+      // 目标可以尚未安装；只借用本地 Harness 的 semver，不导入其启动代码或插件实现。
+      let semver
+      for (const installed of [version, ...scanInstalled()]) {
+        try {
+          const require = createRequire(binPath(installed))
+          // pnpm 的严格依赖布局不会把 app-boot 的 semver 提升到 CLI 旁边。
+          try { semver = createRequire(require.resolve('@deepseek-ai/dsh-app-boot'))('semver') }
+          catch { semver = require('semver') }
+          break
+        } catch { /* 尝试下一份本地运行时 */ }
+      }
+      if (!semver) throw new Error('请先安装一个 DSH 版本以提供兼容性检查。')
+      if (!semver.valid(version)) throw new Error('Invalid dsh target version')
+      const result = checkPluginCompatibility(profileDirOf(profile), version,
+        (target, range) => semver.satisfies(target, range, { includePrerelease: true }))
+      send(res, 200, { ...result, profile })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/plugins') {
+    // 浏览插件的 profile 与启动默认值分开；查看另一份配置不能偷偷改变启动行为。
+    const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+    send(res, 200, { ...packsPayload(), ...listPlugins(profileDirOf(profile)), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/desktop-enhance') {
+    // 启动项弹窗编辑时回显「这个 profile 装了几个」；home 走 x-dsh-home 头，profile 走参数。
+    try {
+      const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+      send(res, 200, { profile, desktopEnhance: desktopEnhanceSummary(profile), missing: desktopEnhanceMissing(profile).map((plugin) => plugin.name) })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && ['/api/profiles/create', '/api/profiles/copy'].includes(url.pathname)) {
+    const body = await readJson(req)
+    const copying = url.pathname === '/api/profiles/copy'
+    if (copying && !body.source) { send(res, 400, { error: '请选择要复制的 Profile' }); return }
+    try { send(res, 200, await createProfile(body.profile, copying ? body.source : '', copying ? body.sourceHome : '')) }
+    catch (error) { send(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/recover') {
+    const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+    send(res, 200, recoveryPayload(profile))
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/profile-backups') {
+    // 参数坏了回 400 而不是 500：这接口会被页面直接拼 query，别让半截名字炸进目录操作。
+    try {
+      const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+      const id = url.searchParams.get('id')
+      if (id !== null && !PROFILE_BACKUP_ID.test(id)) throw new Error('备份编号不对')
+      send(res, 200, { profile, home: homeDir(), backups: listProfileBackups(profile) })
+    } catch (error) { send(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/plugins/updates') {
+    try {
+      const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+      send(res, 200, { ...(await checkPluginUpdates({ force: url.searchParams.get('refresh') === '1', profile })), profile })
+    } catch (error) {
+      send(res, 500, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/packs') {
+    send(res, 200, packsPayload())
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/packs/market') {
+    try {
+      send(res, 200, { ok: true, ...(await marketEntries({ force: url.searchParams.get('refresh') === '1' })) })
+    } catch (error) {
+      // 市场读不到不算页面出错：这条索引在 GitHub 上，直连/镜像都可能拿不到，
+      // 手动贴链接或 owner/repo 照样能装。
+      send(res, 200, { ok: false, entries: [], error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/packs/market/stats') {
+    try {
+      const market = await marketEntries()
+      const queue = [...market.entries]
+      const entries = []
+      await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (queue.length) entries.push(await readMarketStats(queue.shift()))
+      }))
+      send(res, 200, { ok: true, entries })
+    } catch {
+      send(res, 200, { ok: false, entries: [] })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/events') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    })
+    if (typeof res.flushHeaders === 'function') res.flushHeaders()
+    // 先把旧批次交给既有连接，避免新连接先收回放、随后又收到同一批待发送日志。
+    flushLogEvents()
+    res.write(`event: log\ndata: ${JSON.stringify({ lines: logs.slice(-120) })}\n\n`)
+    res.write(`event: state\ndata: ${JSON.stringify(await snapshot())}\n\n`)
+    if (installProgress) res.write(`event: progress\ndata: ${JSON.stringify(installProgress)}\n\n`)
+    if (pluginProgress) res.write(`event: progress\ndata: ${JSON.stringify({ ...pluginProgress, kind: 'plugin', name: pluginProgressName, profile: pluginProgressProfile })}\n\n`)
+    // 整合包：检查和安装都可能几十秒（下载 + 解包 + pnpm），刷新页面要能接着显示
+    if (packProgress) res.write(`event: progress\ndata: ${JSON.stringify({ ...packProgress, kind: 'pack', name: packProgressName })}\n\n`)
+    // 同步跑得久，页面中途刷新也要能接着显示进度
+    if (syncState) res.write(`event: sync\ndata: ${JSON.stringify(syncState)}\n\n`)
+    clients.add(res)
+    req.on('close', () => clients.delete(res))
+    return
+  }
+
+  const body = req.method === 'POST' ? await readJson(req) : {}
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/test') {
+    const target = safeRemoteTarget(body.remote)
+    // 测试连接的边界刻意停在 SSH：远端没装 DSH/Node 也算连接成功。
+    send(res, 200, await remoteSshProbe(target))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-shell/open') {
+    const target = safeRemoteTarget(body.remote)
+    const cwd = safeRemoteDshHome(body.dshHome || '')
+    send(res, 200, await createRemoteShellSession(target, {
+      cols: Number(body.cols || 100),
+      rows: Number(body.rows || 30),
+      cwd,
+      label: body.label || 'Shell',
+    }))
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/remote-shell/sessions') {
+    send(res, 200, { sessions: remoteShellSnapshot() })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-shell/resize') {
+    send(res, 200, await resizeRemoteShell(String(body.token || ''), Number(body.cols || 100), Number(body.rows || 30)))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-shell/close') {
+    send(res, 200, closeRemoteShell(String(body.token || '')))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/environment') {
+    const target = safeRemoteTarget(body.remote)
+    send(res, 200, await remoteEnvironment(target, safeRemoteDshHome(body.dshHome || ''), await remoteLaunchOptions()))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/versions') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') {
+      send(res, 200, await remoteExec(target, 'version-list', { dshHome, registry: options.registry }, { ...options, timeout: 60_000 }))
+    } else if (action === 'install') {
+      const version = await prepareRemoteVersion(target, {
+        dshHome,
+        version: safeVersion(body.version || 'auto'),
+        updateChannel: body.updateChannel === undefined ? DEFAULT_UPDATE_CHANNEL : safeUpdateChannel(body.updateChannel),
+      }, { ...options, timeout: 1_800_000 })
+      send(res, 200, { ok: true, version })
+    } else if (action === 'remove') {
+      const version = safeVersion(body.version)
+      const result = await remoteExec(target, 'version-remove', { dshHome, version, profile: safeProfile(body.profile || 'web') }, { ...options, timeout: 60_000 })
+      send(res, 200, { ...result, launchPresets: await detachRemoteVersion(target, dshHome, version) })
+    } else if (action === 'replace') {
+      const version = safeVersion(body.version)
+      const result = await remoteVersionReplace(target, dshHome, safeProfile(body.profile || 'web'), version, options.registry, { ...options, timeout: 1_800_000 })
+      send(res, 200, { ...result, replaced: true, launchPresets: safeLaunchPresets((await loadSettings()).launchPresets)
+        .filter((entry) => entry.remote && entry.remote.host === target.host && entry.remote.user === target.user && (entry.dshHome || '') === dshHome) })
+    } else if (action === 'optimize') {
+      send(res, 200, await remoteVersionOptimize(target, dshHome, safeProfile(body.profile || 'web'), safeVersion(body.version), { ...options, timeout: 1_800_000 }))
+    } else throw new Error('未知远程版本操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/profiles') {
+    const target = safeRemoteTarget(body.remote)
+    send(res, 200, await remoteProfiles(target, safeRemoteDshHome(body.dshHome || ''), await remoteLaunchOptions()))
+    return
+  }
+  if (req.method === 'POST' && ['/api/remote/profiles/create', '/api/remote/profiles/rename', '/api/remote/profiles/delete', '/api/remote/profiles/recover', '/api/remote/profiles/recover/list', '/api/remote/profiles/recover/restore'].includes(url.pathname)) {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const options = await remoteLaunchOptions()
+    if (url.pathname.endsWith('/create')) send(res, 200, await remoteProfileCreate(target, dshHome, safeProfile(body.profile), options))
+    else if (url.pathname.endsWith('/rename')) send(res, 200, await remoteProfileRename(target, dshHome, safeProfile(body.from), safeProfile(body.to), options))
+    else if (url.pathname.endsWith('/recover/list')) send(res, 200, await remoteProfileRecoverList(target, dshHome, safeProfile(body.profile || 'web'), options))
+    else if (url.pathname.endsWith('/recover/restore')) send(res, 200, await remoteProfileRecoverRestore(target, dshHome, safeProfile(body.profile || 'web'), String(body.backup || ''), options))
+    else if (url.pathname.endsWith('/recover')) send(res, 200, await remoteProfileRecover(target, dshHome, safeProfile(body.profile || 'web'), options))
+    else send(res, 200, await remoteProfileDelete(target, dshHome, safeProfile(body.profile), String(body.confirmPath || ''), options))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/profiles/packs') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const profile = safeProfile(body.profile || 'web')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') send(res, 200, await remotePackList(target, dshHome, profile, options))
+    else if (action === 'install') {
+      const bytes = await remotePackBytes(body)
+      send(res, 200, await remotePackInstall(target, dshHome, profile, bytes, body.source || '', options))
+    }
+    else if (action === 'uninstall') send(res, 200, await remotePackUninstall(target, dshHome, profile, String(body.name || ''), options))
+    else if (action === 'export') send(res, 200, await remotePackExport(target, dshHome, { ...body, profile }, options))
+    else throw new Error('未知远程整合包操作')
+    return
+  }
+  if (req.method === 'POST' && ['/api/remote/profiles/config/read', '/api/remote/profiles/config/write'].includes(url.pathname)) {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const profile = safeProfile(body.profile)
+    const file = String(body.file || '')
+    if (!['package.json', 'cordis.patch.yml', 'cordis.yml'].includes(file)) throw new Error('不支持的远端配置文件')
+    const options = await remoteLaunchOptions()
+    send(res, 200, url.pathname.endsWith('/read')
+      ? await remoteConfigRead(target, dshHome, profile, file, options)
+      : await remoteConfigWrite(target, dshHome, profile, file, String(body.content || ''), options))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/credentials') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') send(res, 200, await remoteCredentialsList(target, dshHome, options))
+    else if (action === 'set') send(res, 200, await remoteCredentialSet(target, dshHome, String(body.name || ''), String(body.value || ''), options))
+    else if (action === 'unset') send(res, 200, await remoteCredentialUnset(target, dshHome, String(body.name || ''), options))
+    else throw new Error('未知远程凭据操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/files') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'capabilities')
+    const profile = safeProfile(body.profile || 'web')
+    const version = safeVersion(body.version || 'auto')
+    if (action === 'capabilities') {
+      send(res, 200, await remoteFileCapabilities(target, dshHome, profile, version, options))
+    } else if (action === 'list') {
+      const path = String(body.path || '.')
+      if (path.length > 4096 || path.includes('\0')) throw new Error('远端文件路径不合法')
+      send(res, 200, await remoteFileList(target, dshHome, path, options))
+    } else if (action === 'read') {
+      const path = String(body.path || '')
+      if (!path || path.length > 4096 || path.includes('\0')) throw new Error('远端文件路径不合法')
+      const mode = String(body.mode || 'auto')
+      if (!['auto', 'text', 'bytes'].includes(mode)) throw new Error('不支持的远端文件读取模式')
+      send(res, 200, await remoteFileRead(target, dshHome, path, mode, options))
+    } else if (action === 'install-official') {
+      const capabilities = await remoteFileCapabilities(target, dshHome, profile, version, options)
+      for (const name of capabilities.missing || []) {
+        await remotePluginInstall(target, dshHome, profile, name, version, { ...options, timeout: 1_800_000 })
+      }
+      send(res, 200, await remoteFileCapabilities(target, dshHome, profile, version, options))
+    } else throw new Error('未知远程文件操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/profiles/plugins') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const profile = safeProfile(body.profile || 'web')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') send(res, 200, await remotePlugins(target, dshHome, profile, options))
+    else if (action === 'toggle') send(res, 200, await remotePluginToggle(target, dshHome, profile, String(body.name || ''), body.enabled !== false, options))
+    else if (action === 'install') send(res, 200, await remotePluginInstall(target, dshHome, profile, String(body.spec || ''), safeVersion(body.version || 'auto'), options))
+    else if (action === 'remove') send(res, 200, await remotePluginRemove(target, dshHome, profile, String(body.name || ''), safeVersion(body.version || 'auto'), options))
+    else if (action === 'update') send(res, 200, await remotePluginUpdate(target, dshHome, profile, String(body.name || ''), body.all === true, options))
+    else if (action === 'dependency-check' || action === 'dependency-repair') send(res, 200, await remoteDependencyCheck(target, dshHome, profile, safeVersion(body.version || 'auto'), action === 'dependency-repair', options))
+    else throw new Error('未知远程插件操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/profiles/mcp') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const profile = safeProfile(body.profile || 'web')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') send(res, 200, await remoteMcpList(target, dshHome, profile, options))
+    else if (action === 'probe') send(res, 200, await remoteMcpProbe(target, dshHome, profile, options))
+    else if (action === 'save') send(res, 200, await remoteMcpSave(target, dshHome, profile, body.spec || {}, options))
+    else if (action === 'toggle') send(res, 200, await remoteMcpToggle(target, dshHome, profile, String(body.name || ''), body.enabled !== false, options))
+    else if (action === 'remove') send(res, 200, await remoteMcpRemove(target, dshHome, profile, String(body.name || ''), options))
+    else throw new Error('未知远程 MCP 操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote/profiles/skills') {
+    const target = safeRemoteTarget(body.remote)
+    const dshHome = safeRemoteDshHome(body.dshHome || '')
+    const profile = safeProfile(body.profile || 'web')
+    const options = await remoteLaunchOptions()
+    const action = String(body.action || 'list')
+    if (action === 'list') send(res, 200, await remoteSkillsList(target, dshHome, profile, options))
+    else if (action === 'detail') send(res, 200, await remoteSkillDetail(target, dshHome, profile, String(body.root || 'dsh'), String(body.relPath || ''), options))
+    else if (action === 'install') {
+      pruneSkillImports()
+      const imported = skillImports.get(String(body.token || ''))
+      if (imported && !Array.isArray(body.packages)) body.packages = imported.packages
+      const result = await remoteSkillInstall(target, dshHome, profile, String(body.root || 'dsh'), body.packages || [], body.selected || [], options)
+      if (imported) skillImports.delete(String(body.token || ''))
+      send(res, 200, { ...result, ...await remoteSkillsList(target, dshHome, profile, options) })
+    }
+    else if (action === 'create') send(res, 200, await remoteSkillCreate(target, dshHome, profile, body, options))
+    else if (action === 'toggle') send(res, 200, await remoteSkillToggle(target, dshHome, profile, String(body.root || 'dsh'), String(body.relPath || ''), body.enabled !== false, options))
+    else if (action === 'remove') send(res, 200, await remoteSkillRemove(target, dshHome, profile, String(body.root || 'dsh'), String(body.relPath || ''), options))
+    else throw new Error('未知远程技能操作')
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/state') {
+    const entry = await remoteLaunchEntry(body.id)
+    const result = await remoteState(entry.remote, entry.id, await remoteLaunchOptions())
+    if (result?.state) rememberRemoteRuntime(entry, { ...result.state, probe: result.probe })
+    send(res, 200, { remote: entry.remote, ...result })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/pair') {
+    try {
+      const entry = await remoteLaunchEntry(body.id)
+      const options = await remoteLaunchOptions()
+      const action = String(body.action || 'status')
+      if (action === 'status') {
+        send(res, 200, await remotePairStatus(entry.remote, entry.id, options))
+      } else if (action === 'issue') {
+        // 配对 URL 是一次性凭据：只在内存中返回给本机管理页，不写设置、不写日志。
+        const status = await remotePairStatus(entry.remote, entry.id, options)
+        if (status.requirePairingForLan === false) {
+          send(res, 200, { needed: false, status })
+          return
+        }
+        const issued = await remotePairIssue(entry.remote, entry.id, entry.remote.host, options)
+        send(res, 200, {
+          needed: true,
+          url: issued.url || '',
+          expiresAt: issued.expiresAt || 0,
+          lanAddresses: issued.lanAddresses || [],
+        })
+      } else throw new Error('未知远程配对操作')
+    } catch (error) {
+      if (error?.code === 'REMOTE_PAIR_PLUGIN_UNAVAILABLE') {
+        send(res, 503, { error: error.message, code: error.code })
+      } else if (error?.code?.startsWith('REMOTE_PAIR_')) {
+        send(res, 409, { error: error.message, code: error.code })
+      } else throw error
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/start') {
+    try {
+      send(res, 200, await startRemoteLaunch(body.id, {
+        takeover: body.takeover === true,
+        allowMissingCredential: body.allowMissingCredential === true,
+      }))
+    } catch (error) {
+      if (error?.code === 'REMOTE_DSH_TAKEOVER_REQUIRED') {
+        send(res, 409, { error: error.message, code: error.code, processes: error.processes || [] })
+      } else if (error?.code === 'REMOTE_DSH_HTTP_NOT_READY') {
+        send(res, 503, { error: error.message, code: error.code, state: error.state || null, probe: error.probe || null })
+      } else if (error?.code === 'REMOTE_OPERATION_BUSY') {
+        send(res, 409, { error: error.message, code: error.code })
+      } else if (error?.code === 'REMOTE_DSH_CREDENTIAL_REQUIRED') {
+        // 只返回远端凭据“名字/状态”，不返回真实值；前端据此弹出一次性输入窗口。
+        send(res, 428, {
+          error: error.message,
+          code: error.code,
+          credentials: error.credentials || { refs: [], records: [] },
+        })
+      } else throw error
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/stop') {
+    const entry = await remoteLaunchEntry(body.id)
+    const result = await remoteStopEntry(entry.remote, entry.id, await remoteLaunchOptions())
+    rememberRemoteRuntime(entry, result?.state || result)
+    send(res, 200, result)
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/remote-launch/open-manager') {
+    const entry = await remoteLaunchEntry(body.id)
+    const state = await remoteState(entry.remote, entry.id, await remoteLaunchOptions())
+    if (state?.state) rememberRemoteRuntime(entry, { ...state.state, probe: state.probe })
+    if (!state?.state?.alive || !state?.state?.url) throw new Error('远端 DSH 尚未启动或没有可用访问地址')
+    if (state.probe && !state.probe.ok) throw new Error(`远端 DSH 服务检测失败：${state.probe.reason || state.probe.status || '未知原因'}`)
+    send(res, 200, { url: state.state.url, host: entry.remote.host, remoteUrl: state.state.url, kind: 'dsh', probe: state.probe })
+    return
+  }
+  // 插件桌面 API：插件在 dsh 子进程里用本机 HTTP 调这里，真正的 Notification / dialog /
+  // clipboard 由外壳的 host.desktop 执行（见 shell/main.mjs）。GET 只回能力清单。
+  if (url.pathname === '/api/desktop' || url.pathname.startsWith('/api/desktop/')) {
+    if (url.pathname === '/api/desktop') {
+      if (req.method !== 'GET') send(res, 405, { error: '/api/desktop 只支持 GET' })
+      else send(res, 200, desktopPayload())
+      return
+    }
+    if (req.method !== 'POST') {
+      send(res, 405, { error: '桌面能力只支持 POST' })
+      return
+    }
+    if (!host.desktop) {
+      // 浏览器模式 / 旧外壳：能力不存在。插件按 available=false 降级，别重试。
+      send(res, 503, { available: false, error: '桌面能力不可用：当前不是 DSH-X 桌面外壳在运行' })
+      return
+    }
+    const action = url.pathname.slice('/api/desktop/'.length)
+    let request
+    try {
+      request = parseDesktopRequest(action, body)
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    if (!request) {
+      send(res, 404, { error: `没有 /api/desktop/${action} 这个能力` })
+      return
+    }
+    if (typeof host.desktop[request.action] !== 'function') {
+      send(res, 503, { available: false, error: `这个外壳还不支持 ${request.action}` })
+      return
+    }
+    // 只显示真实存在的路径：这条路由没有鉴权，不能变成任意路径的文件管理器入口。
+    if (request.action === 'reveal' && !existsSync(request.path)) {
+      send(res, 400, { error: '这个路径不存在' })
+      return
+    }
+    try {
+      const result = await host.desktop[request.action](request)
+      send(res, 200, { ok: true, ...(result && typeof result === 'object' ? result : {}) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`桌面能力 ${request.action} 失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  // 设置页「浏览器控制」的两个清理按钮：guest 分区在 Electron 外壳里，核心只能转发。
+  // 只影响内置浏览器（persist:dsh-sidebar-browser-*），管理页和 dsh 页面的数据不动。
+  if (req.method === 'POST' && (url.pathname === '/api/browser/clear-cache' || url.pathname === '/api/browser/clear-data')) {
+    if (!host.browser) {
+      send(res, 503, { available: false, error: '浏览器数据清理不可用：当前不是 DSH-X 桌面外壳在运行，或外壳版本太旧' })
+      return
+    }
+    const action = url.pathname.endsWith('/clear-cache') ? 'clearCache' : 'clearAll'
+    if (typeof host.browser[action] !== 'function') {
+      send(res, 503, { available: false, error: `这个外壳还不支持 ${action}` })
+      return
+    }
+    try {
+      const result = await host.browser[action]()
+      pushLog(action === 'clearCache' ? '内置浏览器缓存已清除' : '内置浏览器的 Cookie、站点数据和缓存已清除')
+      send(res, 200, { ok: true, ...(result && typeof result === 'object' ? result : {}) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`清理内置浏览器数据失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && ['/api/diagnosis/repair/preview', '/api/diagnosis/repair/execute', '/api/diagnosis/repair/rollback'].includes(url.pathname)) {
+    try {
+      let result
+      if (url.pathname.endsWith('/preview')) {
+        result = await diagnosticRepairs.preview(body.binding)
+      } else {
+        try {
+          if (url.pathname.endsWith('/execute')) {
+            result = await diagnosticRepairs.execute(body.id, body.actionId)
+          } else {
+            result = await diagnosticRepairs.rollback(body.id)
+          }
+        } finally {
+          // 复验过程中的状态早于最终历史落盘；响应前再发布一次，重开记录才能看到最终结果。
+          await emitState()
+        }
+      }
+      const exposed = result.action ? { ...result, recorded: recordedChanges(result) } : result
+      send(res, 200, publicFailure({ message: '', diagnosis: exposed }).diagnosis)
+    } catch (error) {
+      // 已落盘的修改不能因复验失败而在当前界面消失；仅返回本次请求对应的记录。
+      const record = error.repairRecord
+      const matching = !url.pathname.endsWith('/preview') && record && record.id === body.id && (url.pathname.endsWith('/rollback') || record.action?.id === body.actionId)
+      const repairRecord = matching ? publicFailure({ message: '', diagnosis: { ...record, recorded: recordedChanges(record) } }).diagnosis : null
+      send(res, 409, { error: publicFailure({ message: String(error.message || error) }).message, ...(repairRecord ? { repairRecord } : {}) })
+    }
+    return
+  }
+  if (req.method === 'POST' && ['/api/diagnosis/plan', '/api/diagnosis/plan/check'].includes(url.pathname)) {
+    const result = checkedRepairPlan(body.binding, diagnosticForAttempt, LANG, url.pathname.endsWith('/check'))
+    const exposed = publicFailure({ message: '', diagnosis: result.body.plan, binding: result.body.binding })
+    send(res, result.status, {
+      ...result.body,
+      ...(result.body.plan ? { plan: exposed.diagnosis } : {}),
+      ...(result.body.binding ? { binding: exposed.binding } : {}),
+    })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/pending/skip') {
+    send(res, 200, await skipPendingUpdate(body))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/self/download') {
+    // 第一步：下载。进度走 selfUpdate 事件，页面显示进度条
+    try {
+      send(res, 200, await downloadSelfUpdate())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`更新下载失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/self/install') {
+    // 第二步：安装引擎就绪后先响应页面，再收尾退出，避免把用户留在没有启动器的状态。
+    try {
+      send(res, 200, await installSelfUpdate())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`更新安装失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/self/app-download') {
+    // 核心更新：从 npm 下载 tarball → 校验 sha512 → 解到暂存目录；进度复用 selfUpdate 事件
+    try {
+      // 自动更新与页面可能同时发起：并到同一份下载上，免得两个 tarball 抢同一个暂存目录
+      if (!appDownloadInFlight) {
+        appDownloadInFlight = downloadAppUpdate().finally(() => { appDownloadInFlight = null })
+      }
+      send(res, 200, await appDownloadInFlight)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`核心更新下载失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/self/app-apply') {
+    // 核心增量：核心不在用户目录 → 复制到 core/current，重启外壳（外壳优先加载它）；
+    // 已经在 core/current → 替换助手等外壳退出后原地换目录，失败回滚。
+    try {
+      // 已经开过一次（连点两下或两个标签页同时点）：重复替换会把刚换好的目录再挪一遍
+      if (appApplyStarted) {
+        send(res, 200, { ok: true, already: true })
+        return
+      }
+      appApplyStarted = true
+      send(res, 200, await applyAppUpdate())
+    } catch (error) {
+      appApplyStarted = false
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`核心更新失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/restart') {
+    send(res, 200, await restartInstalled())
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/quit') {
+    // 托盘的「退出」走这里：先把响应发出去，再收尾退出，否则调用方只会看到连接被掐断
+    send(res, 200, { ok: true })
+    shutdown().finally(() => host.exit(0))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/install') {
+    await install(body.version)
+    versionSizesCache.at = 0
+    invalidateStorageBreakdown()
+    send(res, 200, { ok: true })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/versions/optimize') {
+    const result = await optimizeVersion(body.version)
+    versionSizesCache.at = 0
+    invalidateStorageBreakdown()
+    send(res, 200, result)
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/start') {
+    // 先记后启：启动项这次实际用的版本要留给清理规则当「当前用」。
+    await recordLaunchUse(launchScope.getStore()?.launchId, body.version)
+    send(res, 200, await start(body.version, body.profile))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/profiles/rename') {
+    try { send(res, 200, await renameProfile(body.profile, body.name)) }
+    catch (error) { send(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/dsh-homes/open') {
+    const dir = safeDshHome(body.home) || defaultHome()
+    const stored = await loadSettings()
+    const known = [defaultHome(), ...safeDshHomes(stored.dshHomes), ...safeLaunchPresets(stored.launchPresets).map((entry) => entry.dshHome), ...instanceList().map((item) => item.home)]
+    const same = (home) => fileManager.samePath(home, dir)
+    if (!known.some(same)) throw new Error('只支持打开已登记的用户目录')
+    await openDirectory(dir)
+    pushLog(`已打开用户目录 ${dir}`)
+    send(res, 200, { ok: true, dir })
+    return
+  }
+  if (req.method === 'POST' && ['/api/dsh-homes/add', '/api/dsh-homes/remove'].includes(url.pathname)) {
+    const home = safeDshHome(body.home)
+    if (!home) throw new Error('请选择用户目录')
+    const same = (left, right) => fileManager.samePath(left, right)
+    const removing = url.pathname.endsWith('/remove')
+    if (removing && same(home, defaultHome())) throw new Error('全局目录不能移除')
+    if (removing && instanceList().some((proc) => same(proc.home, home) && ['starting', 'running', 'stopping'].includes(proc.status))) throw new Error('请先停止使用此目录的实例')
+    const stored = await saveSettings((current) => {
+      // 启动项仍在用的目录不能悄悄消失，也不能为了移除列表而删掉启动项。
+      if (removing && safeLaunchPresets(current.launchPresets).some((entry) => entry.dshHome && same(entry.dshHome, home))) throw new Error('启动项正在使用此目录，请先修改或删除对应启动项')
+      const homes = safeDshHomes(current.dshHomes).filter((item) => !same(item, home))
+      return {
+        dshHomes: removing ? homes : [...homes, home],
+        // 目录都不在了，钉在它上面的端口也没意义；留着会占住端口（#90）。
+        ...(removing ? {
+          environmentPorts: Object.fromEntries(Object.entries(safeEnvironmentPorts(current.environmentPorts))
+            .filter(([dir]) => !same(dir, home))),
+        } : {}),
+      }
+    })
+    if (removing) ENVIRONMENT_PORTS = liveEnvironmentPorts(stored)
+    send(res, 200, { dshHomes: safeDshHomes(stored.dshHomes) })
+    await emitState()
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/dsh-homes/rename') {
+    const home = safeDshHome(body.home)
+    const name = typeof body.name === 'string' ? body.name.trim() : ''
+    if (!home || !name || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) throw new Error('目录名称应为 1 到 64 个字符')
+    const same = (dir) => fileManager.samePath(dir, home)
+    const saved = await saveSettings((current) => {
+      const known = [defaultHome(), ...safeDshHomes(current.dshHomes), ...safeLaunchPresets(current.launchPresets).map((entry) => entry.dshHome), ...instanceList().map((item) => item.home)]
+      const canonical = known.find(same)
+      if (!canonical) throw new Error('只支持重命名已登记的用户目录')
+      const names = Object.fromEntries(Object.entries(safeDshHomeNames(current.dshHomeNames)).filter(([dir]) => !same(dir)))
+      return { dshHomeNames: { ...names, [canonical]: name } }
+    })
+    send(res, 200, { dshHomeNames: safeDshHomeNames(saved.dshHomeNames) })
+    await emitState()
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/dsh-homes/forget-name') {
+    // 清掉一条显示名：目录早就从登记表里消失的历史条目（「用户目录」列表遍历的是 dshHomes，
+    // 界面上看不到它们）只能靠这个收拾，否则永远留在 settings.json 里。
+    const home = safeDshHome(body.home)
+    if (!home) throw new Error('请选择用户目录')
+    const same = (dir) => fileManager.samePath(dir, home)
+    const cleared = await saveSettings((current) => ({
+      dshHomeNames: Object.fromEntries(Object.entries(safeDshHomeNames(current.dshHomeNames)).filter(([dir]) => !same(dir))),
+    }))
+    send(res, 200, { dshHomeNames: safeDshHomeNames(cleared.dshHomeNames) })
+    await emitState()
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/tray/action') {
+    send(res, 200, await trayAction(body))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/instance-port') {
+    send(res, 200, await setInstancePort(body.version, body.profile, body.port))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/launch-presets') {
+    const saved = await saveLaunchPreset(body)
+    // 桌面增强跟着启动项走：启动项落盘之后（写锁已经放掉）再补装缺的三个，
+    // 装插件慢也不会卡住别的启动项编辑。失败只带回结果，启动项本身已经保存成功。
+    if (body.desktopEnhance === true && saved?.entry?.profile) {
+      const home = saved.entry.dshHome || defaultHome()
+      saved.desktopEnhance = await launchScope.run({ home }, async () => {
+        const result = await installDesktopEnhance(saved.entry.profile)
+        return { ...result, activation: await activateDesktopEnhance(saved.entry.profile, result) }
+      })
+      // 已经装齐时是空转（missing 0），不刷日志
+      if (saved.desktopEnhance.missing > 0) {
+        pushLog(`桌面增强：${saved.entry.profile} 安装完成，成功 ${saved.desktopEnhance.installed.length} 个${saved.desktopEnhance.failed.length ? `，失败 ${saved.desktopEnhance.failed.length} 个` : ''}${saved.desktopEnhance.activation?.reloaded ? '，运行中的环境已热切换' : ''}`)
+      }
+    }
+    send(res, 200, saved)
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/launch-log/clear') {
+    const id = String(body.id || '')
+    if (!LAUNCH_ID_RE.test(id)) {
+      send(res, 400, { error: '启动项 id 不合法' })
+      return
+    }
+    clearLaunchLog(id)
+    send(res, 200, { ok: true })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/launch-presets/remove') {
+    send(res, 200, await removeLaunchPreset(String(body.id ?? '')))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/launch-presets/reorder') {
+    send(res, 200, await reorderLaunchPresets(body.ids))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/launch') {
+    send(res, 200, await launchInstalled())
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/stop') {
+    await stop(body.version, body.profile, body.home)
+    send(res, 200, { ok: true })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/uninstall') {
+    await uninstall(body.version)
+    versionSizesCache.at = 0
+    invalidateStorageBreakdown()
+    send(res, 200, { ok: true })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/versions/sizes') {
+    try { send(res, 200, await versionSizes()) }
+    catch (error) { send(res, 500, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/storage/breakdown') {
+    try {
+      const version = safeVersion(url.searchParams.get('version') || '')
+      const profile = safeProfile(url.searchParams.get('profile') || PROFILE_NAME)
+      if (!existsSync(versionDir(version))) throw new Error(`${version} 没有安装在启动器的版本目录里`)
+      send(res, 200, await storageBreakdown(version, profile))
+    } catch (error) { send(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    send(res, 200, await saveManagerSettings(body))
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/proxy/test') {
+    send(res, 200, await testNetwork())
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/recover') {
+    // 安全启动：把补丁层整体移出启动路径（备份即改名），清单里只留官方 bundle。
+    // 这是逐行自动禁用都失效时的最后手段；备份路径要回给页面，方便一键还原。
+    try {
+      const profile = body.profile ? String(body.profile) : PROFILE_NAME
+      const dir = profileDirOf(profile)
+      if (maintainingProfiles.has(profileKey(profile))) throw new Error(`profile「${profile}」正在修改，稍后再试`)
+      // 补丁层马上要改名移出 profile：先在启动器自己的配置备份里留一份（#88 里那次快照
+      // 拍在安全启动之后，cordis.patch.yml 已经不在，回退也拿不回用户的自定义 provider）。
+      await snapshotProfileConfig(profile, { force: true }).catch((error) => {
+        pushLog(`[恢复] 安全启动前的配置快照没成：${error instanceof Error ? error.message : error}`)
+      })
+      const result = await sanitizeProfile(dir)
+      lastRecovery = { at: Date.now(), home: homeDir(), profile, backup: result.backup, dropped: result.dropped, warning: result.warning || null }
+      pushLog(`[恢复] 安全启动（${profile}）：补丁层${result.backup ? `已备份到 ${basename(result.backup)}` : '本来就没有'}，摘掉第三方 bundle ${result.dropped.length} 个${result.dropped.length ? `（${result.dropped.join('、')}）` : ''}${result.warning ? `；${result.warning}` : ''}`)
+      send(res, 200, { ok: true, ...packsPayload(), ...result, ...listPlugins(dir), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`[恢复] 安全启动失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/recover/restore') {
+    try {
+      const profile = body.profile ? String(body.profile) : PROFILE_NAME
+      const dir = profileDirOf(profile)
+      if (maintainingProfiles.has(profileKey(profile))) throw new Error(`profile「${profile}」正在修改，稍后再试`)
+      const result = await restoreProfileBackup(dir, body.backup)
+      if (lastRecovery?.home === homeDir()) lastRecovery = null
+      pushLog(`[恢复] 已还原补丁层 ${result.restored}${result.movedAside ? `（还原前的补丁挪到了 ${basename(result.movedAside)}）` : ''}${result.restoredBundles.length ? `，放回 bundle ${result.restoredBundles.length} 个` : ''}`)
+      send(res, 200, { ok: true, ...packsPayload(), ...result, ...listPlugins(dir), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`[恢复] 还原失败：${message}`)
+      send(res, 500, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/profile-backups/snapshot') {
+    try {
+      const profile = safeProfile(String(body.profile || ''))
+      send(res, 200, { ok: true, backup: await snapshotProfileConfig(profile, { force: body.force === true }) })
+    } catch (error) { send(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/profile-backups/restore') {
+    try {
+      const profile = safeProfile(String(body.profile || '') || PROFILE_NAME)
+      const restored = await restoreProfileConfig(profile, body.id)
+      // 配置回退完再按清单装依赖：node_modules 不在备份里，光改 package.json 会让插件全变「包不可用」。
+      send(res, 200, { ...restored, install: await reinstallAfterRollback(profile) })
+    }
+    catch (error) {
+      // 备份不存在给 404，参数/状态不对给 400，页面靠这两个码区分提示。
+      const message = error instanceof Error ? error.message : String(error)
+      send(res, /找不到这份备份/.test(message) ? 404 : 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/desktop-enhance/install') {
+    // 装桌面增强：把缺的首方插件按顺序装进指定 profile（默认当前）。
+    // 装法复用插件页那条 addPlugin（pnpm add + 写 dsh.profile.bundles）；
+    // 已经装过的不动（link: / file: 也不会被换成 npm 版）。
+    const profile = safeProfile(String(body.profile || '') || PROFILE_NAME)
+    if (!desktopEnhanceMissing(profile).length) {
+      send(res, 200, { ok: true, installed: [], failed: [], desktopEnhance: desktopEnhanceSummary(profile), ...listPlugins(profileDirOf(profile)), profile })
+      return
+    }
+    if (pluginBusy) {
+      send(res, 409, { error: '正在装插件或整合包，等它结束再试' })
+      return
+    }
+    let version
+    try {
+      version = await pluginCommandVersion(profile)
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const installedResult = await installDesktopEnhance(profile, version)
+    const activation = await activateDesktopEnhance(profile, installedResult)
+    pushLog(`桌面增强：${profile} 安装完成，成功 ${installedResult.installed.length} 个${installedResult.failed.length ? `，失败 ${installedResult.failed.length} 个` : ''}${activation.reloaded ? '，运行中的环境已热切换' : ''}`)
+    send(res, 200, {
+      ok: installedResult.failed.length === 0 && !activation.error,
+      installed: installedResult.installed,
+      failed: installedResult.failed,
+      activation,
+      desktopEnhance: desktopEnhanceSummary(profile),
+      ...listPlugins(profileDirOf(profile)),
+      profile,
+    })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/desktop-enhance/uninstall') {
+    // 「一键卸载」：只卸桌面增强这三个包（pnpm remove + 从层栈摘掉），会话、记忆和别的插件不动。
+    const profile = safeProfile(String(body.profile || '') || PROFILE_NAME)
+    let manifest = null
+    try {
+      manifest = JSON.parse(readFileSync(join(profileDirOf(profile), 'package.json'), 'utf8'))
+    } catch { /* 没有 profile 就当没装 */ }
+    const dependencies = manifest?.dependencies && typeof manifest.dependencies === 'object' ? manifest.dependencies : {}
+    const targets = DESKTOP_PLUGINS.filter((plugin) => Object.hasOwn(dependencies, plugin.name))
+    if (!targets.length) {
+      send(res, 200, { ok: true, removed: [], failed: [], desktopEnhance: desktopEnhanceSummary(profile), ...listPlugins(profileDirOf(profile)), profile })
+      return
+    }
+    if (pluginBusy) {
+      send(res, 409, { error: '正在装插件或整合包，等它结束再试' })
+      return
+    }
+    let version
+    try {
+      version = await pluginCommandVersion(profile)
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const removed = []
+    const failed = []
+    pluginBusy = true
+    try {
+      for (const plugin of targets) {
+        pushLog(`桌面增强：从 ${profile} 卸载 ${plugin.label}（${plugin.name}）`)
+        try {
+          await runPluginCommand(version, ['remove', plugin.name], `dsh plugin remove ${plugin.name}`, { profile })
+          removeBundleMounted(profileDirOf(profile), [plugin.name])
+          removed.push(plugin.name)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          failed.push({ name: plugin.name, error: message })
+          pushLog(`桌面增强：${plugin.name} 卸载失败：${message}`)
+        }
+      }
+    } finally {
+      pluginBusy = false
+      invalidateStorageBreakdown()
+    }
+    pushLog(`桌面增强：${profile} 卸载完成，成功 ${removed.length} 个${failed.length ? `，失败 ${failed.length} 个` : ''}（重启 dsh 后生效）`)
+    send(res, 200, { ok: failed.length === 0, removed, failed, desktopEnhance: desktopEnhanceSummary(profile), ...listPlugins(profileDirOf(profile)), profile })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/plugins/add') {
+    try {
+      if (pluginBusy) {
+        send(res, 409, { error: '正在安装或卸载插件，等它结束再试' })
+        return
+      }
+      const profile = safeProfile(String(body.profile || PROFILE_NAME))
+      const spec = normalizePluginSpec(body.spec)
+      const name = bundleNameOf(spec)
+      const target = profileDirOf(profile)
+      // 官方组件随 dsh 版本走，单独装/换版本会和运行时的 @deepseek-ai/* 对不上。
+      if (name && name.startsWith('@deepseek-ai/')) throw new Error('官方组件随 dsh 安装，不能单独添加')
+      if (name && Object.hasOwn(profileDependencies(target), name)) {
+        throw new Error(`${name} 已经在这个环境里；要升级请用插件行的更新按钮`)
+      }
+      const version = await pluginCommandVersion(profile)
+      await addPlugin(version, spec, { profile })
+      pluginUpdateCache.at = 0
+      pushLog(`插件 ${name || spec} 已装进 ${profile}（重启 dsh 后生效）`)
+      send(res, 200, { ok: true, spec, name, ...packsPayload(), ...listPlugins(target), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`添加插件失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/plugins/remove') {
+    try {
+      if (pluginBusy) {
+        send(res, 409, { error: '正在安装或卸载插件，等它结束再试' })
+        return
+      }
+      const profile = safeProfile(String(body.profile || PROFILE_NAME))
+      const name = String(body.name || '').trim()
+      if (!name) throw new Error('请选择要卸载的插件')
+      if (name.startsWith('@deepseek-ai/')) throw new Error('官方组件随 dsh 安装，不能在这里卸载')
+      const target = profileDirOf(profile)
+      if (!Object.hasOwn(profileDependencies(target), name)) throw new Error(`这个环境里没有装 ${name}`)
+      const version = await pluginCommandVersion(profile)
+      await removePlugin(version, name, { profile })
+      pluginUpdateCache.at = 0
+      send(res, 200, { ok: true, name, ...packsPayload(), ...listPlugins(target), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`卸载插件失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/plugins/toggle') {
+    const name = String(body.name || '')
+    const enabled = body.enabled !== false
+    // 整合包卡片可能装在别的 profile 上，切换插件时得能指定目标（不传就是当前 profile）
+    const profile = safeProfile(String(body.profile || PROFILE_NAME))
+    const target = profileDirOf(profile)
+    const result = await editProfile(profile, () => setPluginEnabled(target, name, enabled))
+    const where = body.profile && String(body.profile) !== PROFILE_NAME ? `（profile ${body.profile}）` : ''
+    pushLog(`插件 ${name} → ${enabled ? '启用' : '禁用'}${where}${result.changed ? '' : result.mounted ? '（补挂载）' : '（无变化）'}`)
+    send(res, 200, { ok: true, changed: result.changed, ...packsPayload(), ...listPlugins(target), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/plugins/update') {
+    try {
+      const profile = safeProfile(String(body.profile || PROFILE_NAME))
+      const result = body.all ? await updateAllPlugins(profile) : await updatePlugin(String(body.name || ''), { profile })
+      pushLog(body.all
+        ? `插件更新完成：成功 ${result.done.length} 个${result.failed.length ? `，失败 ${result.failed.length} 个` : ''}（重启 dsh 后生效）`
+        : `${result.name} ${result.changed ? `已更新到 ${result.to}` : '已是最新'}（重启 dsh 后生效）`)
+      send(res, 200, { ok: true, ...result, ...listPlugins(profileDirOf(profile)), profile, autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`插件更新失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+/**
+ * 把启动日志里报「版本不兼容」的官方插件升级到与 dsh 运行时对齐的版本。
+ *
+ * 日志里报的是加载行（可能是传递依赖，比如 codex 拉进来的 tool-subagent），直接升级传递依赖
+ * 只会多装一份；真正该动的是声明了精确版本约束的直接依赖。所以这里从磁盘扫（见
+ * incompatibleDirectDeps）。官方包的版本跟 dsh 对齐；第三方插件的兼容版本推断不了，
+ * 跳过并让用户去插件市场。
+ */
+  if (req.method === 'POST' && url.pathname === '/api/plugins/upgrade-incompatible') {
+    try {
+      const profile = safeProfile(String(body.profile || PROFILE_NAME))
+      const version = String(body.version || '')
+      if (!VERSION_RE.test(version)) throw new Error('版本号不正确')
+      const candidates = incompatibleDirectDeps(profileDirOf(profile), version)
+      const official = candidates.map((item) => item.name).filter((name) => name.startsWith('@deepseek-ai/'))
+      const skipped = candidates.map((item) => item.name).filter((name) => !name.startsWith('@deepseek-ai/'))
+      if (!official.length) throw new Error('没有可自动升级的官方插件，请在插件市场里处理')
+      for (const name of official) {
+        await runPluginCommand(version, ['add', `${name}@${version}`], `升级 ${name}`, { profile })
+      }
+      pushLog(`插件升级到 ${version}：${official.join('、')}（重启实例后生效）`)
+      send(res, 200, { ok: true, upgraded: official, skipped })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`插件升级失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  // ---- 整合包：检查 / 安装 / 卸载 / 导出 ----
+
+  if (req.method === 'POST' && url.pathname === '/api/packs/inspect') {
+    const token = String(body.token || '') || newPackToken()
+    const found = body.token ? packInspectCache.get(token) : null
+    const cached = found?.home === homeDir() ? found : null
+    if (body.token && !cached) {
+      send(res, 400, { error: '这次检查已经过期，重新选择整合包再试' })
+      return
+    }
+    const source = body.market
+      ? { kind: 'market', id: String(body.market.id || ''), url: String(body.market.downloadUrl || ''), sha256: String(body.market.sha256 || ''), size: Number(body.market.size) || 0, name: String(body.market.name || '') }
+      : String(body.source || '')
+    packProgressName = body.market ? String(body.market.displayName || body.market.name || '') : String(body.source || '')
+    emitPackProgress({ phase: 'fetch', done: 0, total: 0 })
+    try {
+      // 切换安装环境只重算计划，复用已下载的包，不再请求下载源。
+      const opened = cached
+        ? { pack: statSync(cached.file).isDirectory() ? parsePackDir(cached.file) : parsePackArchive(await readFile(cached.file)), file: cached.file, source: cached.source, token, bytes: cached.bytes }
+        : await openPackSource(source, { token, onProgress: (state) => emitPackProgress(state) })
+      // 检查会往 inbox 落一份包，顺手清掉过期的：一次会话里检查很多个也不会把磁盘堆满
+      void prunePackInbox()
+      if (opened.token) {
+        packInspectCache.set(opened.token, { home: homeDir(), file: opened.file, source: opened.source, raw: cached ? cached.raw : source, bytes: opened.bytes || 0, at: Date.now() })
+      }
+      const payload = { ok: true, token: opened.token, source: opened.source, bytes: opened.bytes || 0, ...packPlanPayload(opened.pack, String(body.profile || '')) }
+      pushLog(`整合包检查：${payload.pack.displayName || payload.pack.name} ${payload.pack.version}（${payload.pack.bundles.length} 层、${payload.pack.dependencies.length} 个依赖）${payload.ok ? '' : '，有问题'}`)
+      send(res, 200, payload)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`整合包检查失败：${message}`)
+      send(res, 400, { ok: false, error: message })
+    } finally {
+      packProgressName = ''
+      emitPackProgress(null)
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/install') {
+    try { assertLauncherIdle() } catch (error) {
+      send(res, 400, { error: error.message })
+      return
+    }
+    if (pluginBusy) {
+      send(res, 400, { error: '正在装插件或整合包，等它结束再试' })
+      return
+    }
+    const token = String(body.token || '')
+    const found = token ? packInspectCache.get(token) : null
+    const cached = found?.home === homeDir() ? found : null
+    // 缓存里的 source 是给人看的描述（「目录：…」「链接：…」），重开源要用检查时那份原始输入
+    const source = cached ? (cached.raw ?? cached.source) : (body.market
+      ? { kind: 'market', id: String(body.market.id || ''), url: String(body.market.downloadUrl || ''), sha256: String(body.market.sha256 || ''), size: Number(body.market.size) || 0, name: String(body.market.name || '') }
+      : String(body.source || ''))
+    if (!cached && !body.source && !body.market) {
+      send(res, 400, { error: token ? '这次检查的临时文件已经过期了，回到上一步重新检查一次再装' : '先检查一次整合包，再点安装' })
+      return
+    }
+    pluginBusy = true
+    packInstalling = true
+    let opened = null
+    try {
+      // 缓存里那条只在它真的是个文件时可用：从本地目录检查出来的包，缓存里记的是目录，
+      // 直接 readFile 会 EISDIR（安装时重新解析一次目录才是对的，本地调试还会改动文件）。
+      const cachedFile = cached?.file && existsSync(cached.file) && statSync(cached.file).isFile() ? cached.file : null
+      opened = cachedFile
+        ? { pack: parsePackArchive(await readFile(cachedFile)), file: cachedFile, source: cached.source, token }
+        : await openPackSource(source, { token: token || newPackToken(), onProgress: (state) => emitPackProgress(state) })
+      const pack = opened.pack
+      packProgressName = pack.displayName || pack.fields.name
+      if (!pack.ok) throw new Error(pack.errors.join('；'))
+      const profile = safeProfile(String(body.profile || '') || defaultProfileFor(pack))
+      assertLauncherIdle()
+      const plan = planInstall(pack, { home: homeDir(), profile, hostProfile: PROFILE_NAME })
+      if (!plan.ok) throw new Error(plan.errors.join('；'))
+      const records = readPackState(packDataDir()).packs.filter((item) => item.profile === profile)
+      const previousRecord = records.find((item) => item.name === pack.fields.name)
+      if (previousRecord && previousRecord !== records.at(-1)) throw new Error('这个整合包后面还安装了其他包，请先撤销后续安装再重装')
+      const version = await pluginCommandVersion(profile)
+      pushLog(`安装整合包 ${pack.fields.name} ${pack.fields.version} → profile ${profile}（${plan.writes.length} 个文件）`)
+      emitPackProgress({ phase: 'write', done: 0, total: plan.writes.length })
+      const result = await applyInstall(plan, {
+        home: homeDir(),
+        dataDir: packDataDir(),
+        pack,
+        source: opened.source,
+        previousRecord,
+        runInstall: async (target) => {
+          emitPackProgress({ phase: 'install', step: 'resolve', done: 0, total: 0 })
+          await runProfileInstall(version, {
+            profile: target,
+            // pnpm 自己的相位放进 step：页面上「下载依赖」和「下载整合包」是两件事
+            onProgress: (state) => emitPackProgress({ phase: 'install', step: state.phase, done: state.done, total: state.total }),
+            log: pushLog,
+          })
+        },
+        log: pushLog,
+      })
+      emitPackProgress({ phase: 'done', done: plan.writes.length, total: plan.writes.length })
+      rememberPack(packDataDir(), result.record)
+      if (token) packInspectCache.delete(token)
+      pushLog(`整合包 ${result.record.name} 已装进 profile「${profile}」（重启 dsh 后生效）`)
+      send(res, 200, {
+        ok: true,
+        installed: result.record,
+        plan: { notes: plan.notes, warnings: plan.warnings, writes: plan.writes.map((write) => write.rel) },
+        ...packsPayload(),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`整合包安装失败：${message}`)
+      send(res, 400, { ok: false, error: message })
+    } finally {
+      packInstalling = false
+      pluginBusy = false
+      packProgressName = ''
+      emitPackProgress(null)
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/toggle') {
+    const profile = String(body.profile || '')
+    const enabled = body.enabled !== false
+    if (!profile) {
+      send(res, 400, { error: '要说清是哪个 profile' })
+      return
+    }
+    const target = join(homeDir(), 'profiles', safeProfile(profile))
+    const plugins = listPlugins(target).plugins
+    if (!plugins.length) {
+      send(res, 404, { error: `profile「${profile}」里没有已安装的插件` })
+      return
+    }
+    let selection
+    try {
+      selection = packPluginSelection(profile, plugins, body)
+    } catch (error) {
+      send(res, 404, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const packages = selection.names
+    if (!packages.length) {
+      send(res, 404, { error: selection.group === 'pack' ? `整合包「${selection.pack}」在 profile「${profile}」里没有已安装插件` : `profile「${profile}」里没有属于这个分组的插件` })
+      return
+    }
+    let changed = 0
+    const failed = []
+    await editProfile(profile, () => {
+      for (const item of packages) {
+        try {
+          if (setPluginEnabled(target, item, enabled).changed) changed += 1
+        } catch (error) {
+          failed.push(`${item}：${error instanceof Error ? error.message : error}`)
+        }
+      }
+    })
+    pushLog(`profile ${profile} 的插件 → ${enabled ? '启用' : '禁用'}（${changed} 个有变化${failed.length ? `，${failed.length} 个不支持：${failed.join('；')}` : ''}）`)
+    send(res, 200, { ok: true, changed, failed, selected: packages, pack: selection.pack || '', group: selection.group, profile, ...listPlugins(profileDirOf(profile)), ...packsPayload(), autoFix: autoFixForHome(), recovery: recoveryPayload(profile) })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/update') {
+    const profile = body.profile ? safeProfile(String(body.profile)) : ''
+    if (!profile) {
+      send(res, 400, { error: '要说清是哪个 profile' })
+      return
+    }
+    // 使用明确的目标环境，浏览 Profile 不再写入全局启动设置。
+    if (pluginBusy) {
+      send(res, 400, { error: '正在装插件或整合包，等它结束再试' })
+      return
+    }
+    try {
+      const selection = packPluginSelection(profile, listPlugins(profileDirOf(profile)).plugins, body)
+      const packages = selection.names
+      if (!packages.length) throw new Error(`profile「${profile}」里没有可更新的插件`)
+      const done = []
+      const failed = []
+      const unchanged = []
+      for (const item of packages) {
+        try {
+          const result = await updatePlugin(item, { profile })
+          if (result.changed) done.push(`${item} → ${result.to}`)
+          else unchanged.push(item)
+        } catch (error) {
+          failed.push(`${item}：${error instanceof Error ? error.message : error}`)
+        }
+      }
+      pushLog(`profile ${profile} 的插件更新完成：${done.length} 个升级${failed.length ? `，${failed.length} 个失败` : ''}（重启 dsh 后生效）`)
+      send(res, 200, {
+        ok: true,
+        updated: done.length,
+        failed,
+        unchanged,
+        selected: packages,
+        pack: selection.pack || '',
+        group: selection.group,
+        ...packsPayload(),
+        ...listPlugins(profileDirOf(profile)),
+        profile,
+        autoFix: autoFixForHome(),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`profile ${profile} 的插件更新失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && ['/api/packs/remove-profile', '/api/profiles/delete'].includes(url.pathname)) {
+    const profile = String(body.profile || '')
+    if (!profile) {
+      send(res, 400, { error: '要说清是哪个 profile' })
+      return
+    }
+    if (profile.startsWith('.') || profile.toLowerCase() === 'node_modules') {
+      send(res, 400, { error: '启动器内部目录不能作为 Profile 删除' })
+      return
+    }
+    if (CLI_BLOCKED_PROFILES.has(profile.toLowerCase())) {
+      send(res, 400, { error: `「${profile}」是官方桌面端专用的 Profile，不能删除` })
+      return
+    }
+    const target = join(homeDir(), 'profiles', safeProfile(profile))
+    if (!existsSync(target)) {
+      send(res, 404, { error: `profile「${profile}」的目录不在` })
+      return
+    }
+    try {
+      await withIdleProfile(profile, async () => {
+        await rm(target, { recursive: true, force: true })
+        // 整个环境删除后，安装记录和快捷入口不能继续指向不存在的目录。
+        for (const record of readPackState(packDataDir()).packs.filter((item) => item.profile === profile)) forgetPack(packDataDir(), record.name, profile)
+        const stored = await loadSettings()
+        const presets = safeLaunchPresets(stored.launchPresets).filter((entry) => !(entry.profile === profile && (entry.dshHome || defaultHome()) === homeDir()))
+        // 当前选择不代表目录正在使用。删掉后选剩余环境；全空时退回可首次启动初始化的 web。
+        const resetProfile = homeDir() === defaultHome() && profile === PROFILE_NAME
+        const remaining = listProfiles().filter((name) => existsSync(join(homeDir(), 'profiles', name, 'package.json')))
+        const nextProfile = resetProfile
+          ? (remaining.includes('web') ? 'web' : remaining[0]) || 'web'
+          : PROFILE_NAME
+        await saveSettings({ launchPresets: presets, ...(resetProfile ? { profile: nextProfile } : {}) })
+        if (resetProfile) {
+          PROFILE_NAME = nextProfile
+        }
+      })
+      pushLog(`已删掉整个 profile「${profile}」`)
+      await emitState()
+      send(res, 200, { ok: true, ...listPlugins(profileDir()), ...packsPayload(), autoFix: autoFixForHome(), recovery: recoveryPayload() })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`删 profile「${profile}」失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/uninstall') {
+    const name = String(body.name || '')
+    const profile = String(body.profile || '')
+    const records = readPackState(packDataDir()).packs.filter((item) => item.profile === profile)
+    const record = records.find((item) => item.name === name)
+    if (!record) {
+      send(res, 404, { error: `没有「${name} 装在 ${profile}」这条安装记录` })
+      return
+    }
+    // 备份是按安装顺序叠起来的，先撤旧包会覆盖后来装的包的配置。
+    if (record !== records.at(-1)) {
+      send(res, 400, { error: `请先撤销最近安装的整合包「${records.at(-1).displayName || records.at(-1).name}」，再撤销「${record.displayName || name}」` })
+      return
+    }
+    if (pluginBusy) {
+      send(res, 400, { error: '正在装插件或整合包，等它结束再试' })
+      return
+    }
+    // 删目录这件事先判掉：允许的话才动手卸载，否则会留下「文件还原了、目录没删」的半截状态
+    if (body.removeProfile === true) {
+      if (!record.createdProfile) {
+        send(res, 400, { error: '这个 profile 在装整合包之前就在，不敢整个删掉；可以手动清理这个目录' })
+        return
+      }
+      if (record.profile === PROFILE_NAME) {
+        send(res, 400, { error: `profile「${record.profile}」是启动器正在用的那个，先在插件页换一个 profile 再删` })
+        return
+      }
+    }
+    try {
+      const completed = await withIdleProfile(profile, async () => {
+        const lines = []
+        const profilePath = join(homeDir(), 'profiles', profile)
+        // profile 目录已经被手动删掉时不硬还原——那等于把空目录重新变出一堆配置文件，更吓人
+        const gone = !existsSync(profilePath)
+        const result = gone
+          ? { ok: true, restored: 0 }
+          : uninstallPack(record, { home: homeDir(), log: (line) => { lines.push(line); pushLog(`[整合包] ${line}`) } })
+        if (gone) lines.push(`profile 目录「${profilePath}」已经不在了，只清掉安装记录，不再还原文件`)
+        let removedProfile = false
+        if (body.removeProfile === true) {
+          await rm(join(homeDir(), 'profiles', record.profile), { recursive: true, force: true })
+          removedProfile = true
+          pushLog(`[整合包] 已删掉整个 profile「${record.profile}」`)
+        }
+        // 目录删成功才撤销安装记录；失败时至少还有记录可供用户重试。
+        forgetPack(packDataDir(), name, profile)
+        pushLog(`整合包 ${name} 已从 profile「${profile}」卸下（还原 ${result.restored} 个文件${removedProfile ? '，并删除 profile 目录' : ''}）`)
+        if (record.createdProfile && !removedProfile) {
+          lines.push(`这个 profile 是整合包建的，包新建的文件已删掉；node_modules 里装过的插件还在，想清干净可以在整合包页勾「同时删掉整个 profile 目录」`)
+        }
+        return { restored: result.restored, lines, removedProfile }
+      })
+      send(res, 200, { ok: true, ...completed, ...packsPayload() })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`整合包卸载失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/export') {
+    try {
+      const profile = safeProfile(String(body.profile || '') || PROFILE_NAME)
+      const profilePath = join(homeDir(), 'profiles', profile)
+      if (!existsSync(join(profilePath, 'package.json'))) throw new Error(`profile「${profile}」里没有 package.json，没有可导出的东西`)
+      const name = String(body.name || '').trim() || profile
+      const version = String(body.version || '').trim() || '1.0.0'
+      if (!/^[0-9A-Za-z._+-]{1,24}$/.test(version)) throw new Error('版本号只能用字母、数字和 . _ + - （不超过 24 个字符）')
+      const target = String(body.path || '') || await pickPackFile({ save: true, defaultName: `${name}-${version}.dspack` })
+      if (!target) {
+        send(res, 200, { ok: false, canceled: true })
+        return
+      }
+      const out = exportPack({
+        profileDir: profilePath,
+        home: homeDir(),
+        name,
+        version,
+        displayName: String(body.displayName || '').trim(),
+        includeHome: body.includeHome === true,
+      })
+      await writeFile(target, out.buffer)
+      lastExportPath = target
+      pushLog(`已导出整合包：${target}（${out.bundles.length} 层、${Object.keys(out.dependencies).length} 个依赖${out.homeFiles.length ? `、${out.homeFiles.length} 个用户级文件` : ''}）`)
+      send(res, 200, {
+        ok: true,
+        path: target,
+        bytes: out.buffer.length,
+        bundles: out.bundles,
+        dependencies: out.dependencies,
+        homeFiles: out.homeFiles,
+        skipped: out.skipped,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`导出整合包失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/pick-file') {
+    try {
+      const path = await pickPackFile({ save: false })
+      send(res, 200, { path })
+    } catch (error) {
+      send(res, 200, { path: '', error: error?.message || String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/packs/reveal') {
+    try {
+      // 要 await：定位交给实现类之后是异步的，不等它的话失败会变成未处理的 Promise 拒绝
+      await revealPath(String(body.path || ''))
+      send(res, 200, { ok: true })
+    } catch (error) {
+      send(res, 400, { error: error?.message || String(error) })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/mcp') {
+    send(res, 200, { ...listMcpServers(patchFile()), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/mcp/save') {
+    const result = await editProfile(PROFILE_NAME, () => saveMcpServer(patchFile(), body))
+    const extras = [
+      result.repaired ? '覆盖了损坏区块' : '',
+      ...(result.warnings || []),
+    ].filter(Boolean)
+    pushLog(`MCP 服务器 ${body.serverName} 已保存（${body.transport === 'streamable-http' ? 'http' : 'stdio'}）${extras.length ? ` · ${extras.join('；')}` : ''}`)
+    send(res, 200, {
+      ok: true,
+      warnings: result.warnings || [],
+      repaired: result.repaired === true,
+      ...listMcpServers(patchFile()),
+      profile: PROFILE_NAME,
+    })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/mcp/probe') {
+    // 真起进程 / 真连端点：一次一台或指定的几台，结果按入参顺序返回
+    const { servers } = listMcpServers(patchFile())
+    const wanted = Array.isArray(body.serverNames) && body.serverNames.length
+      ? new Set(body.serverNames.map((name) => String(name)))
+      : null
+    const targets = servers.filter((server) => !wanted || wanted.has(server.serverName))
+    if (!targets.length) {
+      send(res, 200, { ok: true, results: [] })
+      return
+    }
+    pushLog(`开始检测 ${targets.length} 个 MCP 服务器（会真起进程/连端点）…`)
+    const results = await probeMcpServers(targets, probeTimeout(body.timeoutMs))
+    const passed = results.filter((item) => item.ok).length
+    const failed = results.filter((item) => !item.ok)
+    pushLog(`MCP 检测完成：${passed} 台在线${failed.length ? `，${failed.length} 台有问题（${failed.map((item) => `${item.serverName}:${item.stage}`).join('、')}）` : ''}`)
+    send(res, 200, { ok: true, results })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/mcp/toggle') {
+    const name = String(body.serverName || '')
+    const result = await editProfile(PROFILE_NAME, () => setMcpEnabled(patchFile(), name, body.enabled !== false))
+    pushLog(`MCP 服务器 ${name} → ${body.enabled !== false ? '启用' : '停用'}${result.changed ? '' : '（无变化）'}`)
+    send(res, 200, { ok: true, changed: result.changed, ...listMcpServers(patchFile()), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/mcp/remove') {
+    const name = String(body.serverName || '')
+    await editProfile(PROFILE_NAME, () => removeMcpServer(patchFile(), name))
+    pushLog(`MCP 服务器 ${name} 已删除`)
+    send(res, 200, { ok: true, ...listMcpServers(patchFile()), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/skills') {
+    send(res, 200, { ...skillsPayload(), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/skills/preview') {
+    try {
+      pruneSkillImports()
+      const packages = await prepareSkillImport(body)
+      while (skillImports.size >= 4) skillImports.delete(skillImports.keys().next().value)
+      const token = randomBytes(16).toString('hex')
+      skillImports.set(token, { packages, expires: Date.now() + SKILL_IMPORT_TTL })
+      send(res, 200, { token, skills: packages.map(({ files, ...item }) => item) })
+    } catch (error) { send(res, 400, { error: error.message }) }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/skills/install') {
+    try {
+      pruneSkillImports()
+      const item = skillImports.get(body.token)
+      if (!item) throw new Error('技能预览已过期，请重新检查来源')
+      const root = rootDirOf(skillRoots(homeDir()), body.root)
+      const result = installSkillPackages(root, item.packages, body.selected)
+      skillImports.delete(body.token)
+      pushLog(`技能安装完成：${result.installed.join('、')}`)
+      send(res, 200, { ok: true, ...result, ...skillsPayload(), profile: PROFILE_NAME })
+    } catch (error) { send(res, 400, { error: error.message }) }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/skills/detail') {
+    const root = rootDirOf(skillRoots(homeDir()), url.searchParams.get('root'))
+    send(res, 200, readSkill(root, url.searchParams.get('path')))
+    return
+  }
+  if (req.method === 'POST' && ['/api/skills/create', '/api/skills/delete'].includes(url.pathname)) {
+    try {
+      const root = rootDirOf(skillRoots(homeDir()), body.root)
+      const result = url.pathname.endsWith('/create') ? createSkill(root, body) : removeSkill(root, body.path)
+      pushLog(`技能 ${body.name || body.path} → ${url.pathname.endsWith('/create') ? '新增' : '删除'}`)
+      send(res, 200, { ok: true, ...result, ...skillsPayload(), profile: PROFILE_NAME })
+    } catch (error) {
+      send(res, 400, { error: error.message })
+    }
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/api/sync') {
+    send(res, 200, syncPayload())
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/skills/toggle') {
+    const root = rootDirOf(skillRoots(homeDir()), body.root)
+    setSkillEnabled(root, String(body.path || ''), body.enabled !== false)
+    pushLog(`技能 ${body.path} → ${body.enabled !== false ? '启用' : '停用'}`)
+    send(res, 200, { ok: true, ...skillsPayload(), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/skills/open-folder') {
+    // 在资源管理器里打开技能根目录（默认 ~/.dsh/skills）；目录不存在就顺手建好
+    const dir = rootDirOf(skillRoots(homeDir()), body.root || 'dsh')
+    await mkdir(dir, { recursive: true })
+    await openDirectory(dir)
+    pushLog(`已打开技能目录 ${dir}`)
+    send(res, 200, { ok: true, dir })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/skills/local') {
+    const enabled = body.enabled !== false
+    await editProfile(PROFILE_NAME, () => setLocalSkillsEnabled(profileDir(), enabled))
+    pushLog(`本地技能加载 → ${enabled ? '启用' : '恢复默认'}${enabled ? '' : '（清除覆盖）'}`)
+    send(res, 200, { ok: true, ...skillsPayload(), profile: PROFILE_NAME })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sync/save') {
+    let stored
+    try {
+      stored = await saveSettings({
+        s3: 's3' in body ? body.s3 : S3_CONFIG,
+        webdav: 'webdav' in body ? body.webdav : WEBDAV_CONFIG,
+        folder: 'folder' in body ? body.folder : FOLDER_CONFIG,
+        zip: 'zip' in body ? body.zip : ZIP_CONFIG,
+        sync: 'sync' in body ? body.sync : SYNC_OPTIONS,
+      })
+    } catch (error) {
+      // 填错了（桶名不合法、端点不像地址）：说人话回报，别把 500 丢给页面
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    S3_CONFIG = safeS3Config(stored.s3)
+    WEBDAV_CONFIG = safeWebdavConfig(stored.webdav)
+    FOLDER_CONFIG = safeFolderConfig(stored.folder)
+    ZIP_CONFIG = safeZipConfig(stored.zip)
+    SYNC_OPTIONS = safeSyncSettings(stored.sync)
+    // 密钥只留在本机设置文件里，但子进程输出/请求日志里万一带上它就得打码
+    secretValues = [S3_CONFIG.secretAccessKey, S3_CONFIG.sessionToken, WEBDAV_CONFIG.password].filter(Boolean)
+    send(res, 200, syncPayload())
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sync/test') {
+    try {
+      const info = await testSyncConnection()
+      send(res, 200, { ok: true, ...info, ...syncPayload() })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`[同步] 连接失败：${message}`)
+      send(res, 400, { error: message })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sync/run') {
+    const mode = body.mode === 'down' ? 'down' : 'up'
+    try {
+      const summary = await runSyncJob(mode, {
+        scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
+        policy: body.policy,
+        force: body.force === true,
+      })
+      send(res, 200, { ok: true, summary, ...syncPayload() })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sync/stop') {
+    if (!syncRunning) {
+      send(res, 200, { ok: true, stopped: false })
+      return
+    }
+    syncStopRequested = true
+    pushLog('[同步] 收到停止请求，做完手上这个就收手')
+    send(res, 200, { ok: true, stopped: true })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/wake') {
+    await host.onWake?.()
+    send(res, 200, { ok: true })
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/pick-dir') {
+    try {
+      send(res, 200, { path: await pickDirectory(safeDshHome(body.initialPath)) })
+    } catch (error) {
+      pushLog(`目录选择失败: ${error?.message || error}`)
+      send(res, 200, { path: '', error: error?.message || String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/pick-file') {
+    try {
+      send(res, 200, { path: await pickFile({ save: body.save === true, name: String(body.name || '') }) })
+    } catch (error) {
+      pushLog(`文件选择失败: ${error?.message || error}`)
+      send(res, 200, { path: '', error: error?.message || String(error) })
+    }
+    return
+  }
+  if (req.method === 'POST' && url.pathname === '/api/open') {
+    openManagedUrl(body.url, body.internal === true ? 'internal' : OPEN_MODE)
+    send(res, 200, { ok: true })
+    return
+  }
+  send(res, 404, { error: 'not found' })
+}
+
+function mime(path) {
+  if (path.endsWith('.css')) return 'text/css'
+  if (path.endsWith('.js')) return 'text/javascript'
+  if (path.endsWith('.png')) return 'image/png'
+  if (path.endsWith('.svg')) return 'image/svg+xml'
+  if (path.endsWith('.ico')) return 'image/x-icon'
+  return 'text/html'
+}
+
+function isTextFile(file) {
+  return /\.(html|css|js|svg|json|txt|map)$/i.test(file)
+}
+
+export async function startServer() {
+  if (server) return Promise.resolve(`http://127.0.0.1:${PORT}`)
+  await ensureSettings()
+  // 设置页改过端口 / profile 的话，这里拿到的就是新值（PORT 环境变量仍然优先，测试用）
+  if (!process.env.PORT) PORT = resolvePort()
+  PROFILE_NAME = resolveProfile()
+  EXTRA_ARGS = composeExtraArgs((await loadSettings()).args)
+  WEB_BIND = resolveWebBind()
+  if (CLI_ARGS.length) pushLog(`DSH.exe 传入启动参数：${CLI_ARGS.join(' ')}`)
+  const stored = await loadSettings()
+  // 跑 dsh 的 node 记一笔：Electron 自带的那份也写清楚版本。日志里能分辨实际用的是哪个，
+  // 也就能解释「安装目录里还有个旧 node.exe」这类疑问（它不参与，见 platform.js runtimeNode）。
+  if (IN_ELECTRON) {
+    const bundled = Boolean(RUNTIME_NODE_ENV.ELECTRON_RUN_AS_NODE)
+    // 自带的那份就是当前进程自己：直接读 process.versions.node。spawn DSH.exe --version 会
+    // 再起一个 Electron（单实例锁/Chromium），拿到的不是 Node 版本，还可能闪一下窗口。
+    const version = bundled ? process.versions.node : nodeVersionOf(RUNTIME_NODE)
+    pushLog(`跑 dsh 的 node：${RUNTIME_NODE}${version ? `（v${version}）` : ''}${bundled ? '（Electron 自带）' : ''}`)
+    const required = nodeRequirementForInstalled()
+    if (required && version && cmpVer(parseVer(version), parseVer(required)) < 0) {
+      pushLog(`跑 dsh 的 node v${version} 低于 dsh 要求的 >=${required}，启动可能失败；可在设置里把「运行 dsh 的 Node」换成「启动器自带」`)
+    }
+  }
+  // 钉死端口的实例表：启动、重启都读它（页面改这张表走 /api/instance-port）
+  INSTANCE_PORTS = safeInstancePorts(stored.instancePorts)
+  // 旧环境留下的端口钉子：内存里不算它，文件里也顺手清掉，不然重装也不会消失（#90）。
+  const storedEnvironments = safeEnvironmentPorts(stored.environmentPorts)
+  ENVIRONMENT_PORTS = liveEnvironmentPorts(stored)
+  if (Object.keys(ENVIRONMENT_PORTS).length !== Object.keys(storedEnvironments).length) {
+    await saveSettings({ environmentPorts: ENVIRONMENT_PORTS }).catch(() => {})
+    pushLog('已清理旧环境留下的固定端口记录')
+  }
+  // 用户在设置页的选择要跨重启与升级保留，安装语言只初始化缺失的设置。
+  const storedLang = safeLang(stored.lang)
+  const fromInstall = storedLang ? '' : installLang()
+  if (fromInstall) await saveSettings({ lang: fromInstall })
+  LANG = storedLang || fromInstall || 'zh'
+  THEME = safeTheme(stored.theme)
+  PANEL_TRANSPARENCY = safePanelTransparency(stored.panelTransparency)
+  REDUCE_MOTION = stored.reduceMotion === true
+  HIDE_BACKGROUND = stored.hideBackground === true
+  HIDE_BIG_FISH = stored.hideBigFish === true
+  S3_CONFIG = safeS3Config(stored.s3)
+  WEBDAV_CONFIG = safeWebdavConfig(stored.webdav)
+  FOLDER_CONFIG = safeFolderConfig(stored.folder)
+  ZIP_CONFIG = safeZipConfig(stored.zip)
+  SYNC_OPTIONS = safeSyncSettings(stored.sync)
+  secretValues = [S3_CONFIG.secretAccessKey, S3_CONFIG.sessionToken, WEBDAV_CONFIG.password].filter(Boolean)
+  DATA = resolveDataDir()
+  CONFIG = join(DATA, 'config.json')
+  await mkdir(DATA, { recursive: true })
+  cleanStaleUpdates()
+  // 检查过但一直没装的整合包会留在 inbox 里，启动时清一次过期的（DATA 可能刚改过）
+  void prunePackInbox()
+  // 默认 16KB 的请求头上限会被浏览器里堆积的 cookie 顶爆（HTTP 431），放宽到 128KB
+  const handler = async (req, res) => {
+    try {
+      // Host 必须是本机：恶意域名解析到 127.0.0.1（DNS rebinding）时浏览器带的是那个
+      // 域名，浏览器会把它当同源，GET 接口（含 dsh 的 token、日志）就能被读走
+      if (!isLocalHostHeader(req.headers.host)) {
+        send(res, 403, 'forbidden', 'text/plain; charset=utf-8')
+        return
+      }
+      const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`)
+      if (url.pathname.startsWith('/api/')) {
+        // 启动项带自己的 ID；把目录限定在这次异步请求里，并发管理不同环境不会改动全局默认目录。
+        const launchId = req.headers['x-dsh-launch-id']
+        if (launchId) {
+          const entry = safeLaunchPresets(loadSettingsSync().launchPresets).find((item) => item.id === launchId)
+          if (!entry) { send(res, 400, { error: '启动项已不存在，请刷新后重试' }); return }
+          await launchScope.run({ home: entry.dshHome || defaultHome(), launchId }, () => handleApi(req, res, url))
+        } else if (req.headers['x-dsh-home']) {
+          // 设置页按目录管理 Profile，不依赖可能被删除的启动项；中文路径用 URI 编码传输。
+          let home
+          try { home = safeDshHome(decodeURIComponent(req.headers['x-dsh-home'])) } catch (error) {
+            send(res, 400, { error: error.message }); return
+          }
+          if (!home) { send(res, 400, { error: '请选择 dsh 用户目录' }); return }
+          await launchScope.run({ home }, () => handleApi(req, res, url))
+        } else {
+          await handleApi(req, res, url)
+        }
+        return
+      }
+      // 启动等待页：点「启动」后由外壳 / 浏览器新开一个页面，它自己盯着实例状态，
+      // 就绪后跳到 dsh。放在静态分支之前是为了跟管理页共用 __APP_*__ 替换（语言、主题一致），
+      // 并且不让它进条件缓存——升级后第一下就得是新页面。
+      if (req.method === 'GET' && (url.pathname === '/booting' || url.pathname === '/booting/')) {
+        const page = await readFile(join(PUBLIC, 'booting.html'), 'utf8')
+        send(res, 200, page.replaceAll('__APP_LANG__', LANG).replaceAll('__APP_THEME__', THEME), 'text/html; charset=utf-8', { 'cache-control': 'no-store' })
+        return
+      }
+      const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
+      const path = join(PUBLIC, file)
+      if (!path.startsWith(PUBLIC) || !existsSync(path)) {
+        send(res, 404, 'not found', 'text/plain; charset=utf-8')
+        return
+      }
+      const type = mime(path)
+      // 首页嵌着即时设置，仍不缓存；静态资源允许条件重用，源码修改和升级都能立即生效。
+      const headers = {}
+      if (file !== 'index.html') {
+        const info = statSync(path)
+        headers['cache-control'] = 'no-cache'
+        headers.etag = `W/"${info.size.toString(16)}-${info.mtimeMs.toString(16)}"`
+      }
+      const matches = String(req.headers['if-none-match'] || '').split(',').map((value) => value.trim())
+      if (headers.etag && ['GET', 'HEAD'].includes(req.method) && (matches.includes(headers.etag) || matches.includes('*'))) {
+        res.writeHead(304, headers)
+        res.end()
+        return
+      }
+      if (isTextFile(file)) {
+        let body = await readFile(path, 'utf8')
+        if (file === 'index.html') {
+          body = body.replaceAll('__APP_VERSION__', APP_VERSION).replaceAll('__APP_LANG__', LANG).replaceAll('__APP_THEME__', THEME).replaceAll('__APP_PANEL_TRANSPARENCY__', String(PANEL_TRANSPARENCY)).replaceAll('__APP_REDUCE_MOTION__', String(REDUCE_MOTION)).replaceAll('__APP_HIDE_BACKGROUND__', String(HIDE_BACKGROUND)).replaceAll('__APP_HIDE_BIG_FISH__', String(HIDE_BIG_FISH))
+        }
+        send(res, 200, body, `${type}; charset=utf-8`, headers)
+        return
+      }
+      send(res, 200, await readFile(path), type, headers)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog(`错误: ${message}`)
+      const failure = publicFailure(error?.failure)
+      send(res, 500, failure ? { error: message, failure } : { error: message })
+    }
+  }
+
+  // 端口顺延：配置的端口被**别的程序**占了就往后试（最多 PORT_SCAN 个），被自己的
+  // 另一个实例占着则抛 EALREADY，让 start.js 去把它唤醒——双击图标不该起出第二个管理器。
+  const preferred = PORT
+  let lastError = null
+  for (let offset = 0; offset < PORT_SCAN; offset += 1) {
+    const candidate = preferred + offset
+    if (candidate > 65535) break
+    const attempt = createServer({ maxHeaderSize: 128 * 1024 }, handler)
+    try {
+      await new Promise((resolve, reject) => {
+        attempt.once('error', reject)
+        attempt.listen(candidate, '127.0.0.1', () => {
+          attempt.off('error', reject)
+          resolve()
+        })
+      })
+    } catch (error) {
+      attempt.close()
+      if (error?.code !== 'EADDRINUSE') throw error
+      lastError = error
+      if (await probeManager(candidate)) {
+        const busy = new Error(`管理页已经在 ${candidate} 端口上跑着`)
+        busy.code = 'EALREADY'
+        busy.port = candidate
+        throw busy
+      }
+      pushLog(`端口 ${candidate} 被别的程序占用，试下一个`)
+      continue
+    }
+    attempt.on('error', (error) => pushLog(`管理服务出错: ${error?.message || error}`))
+    attempt.on('upgrade', handleRemoteShellUpgrade)
+    server = attempt
+    PORT = candidate
+    if (offset > 0) pushLog(`管理页改用端口 ${PORT}（${preferred} 起被占用）`)
+    pushLog(`DSH 管理器 http://127.0.0.1:${PORT}`)
+    // 给应用层增量更新的替换助手留一个「新版本启动成功」的标记
+    try { writeFileSync(join(APP_DIR, 'update-ok'), String(Date.now())) } catch { /* 标记写不了不影响启动 */ }
+    // 版本更新后刷新快捷方式图标（图标文件名带版本号，快捷方式还指着旧文件）。
+    // 拆包后核心在用户目录里，安装根目录的快捷方式由外壳安装包负责，核心不再碰。
+    if (process.env.DSH_CORE !== '1') void refreshShortcuts().catch(() => {})
+    pushLog(`版本目录 ${DATA}`)
+    pushLog(`DSH_HOME ${homeDir()}`)
+    // 远程项的首个事实源不在本机；服务启动后周期性同步，让首页/托盘/内部标签恢复远程运行态。
+    void refreshRemoteRuntimeStates({ force: true }).catch(() => {})
+    const remoteRuntimeTimer = setInterval(() => { void refreshRemoteRuntimeStates().catch(() => {}) }, 30_000)
+    if (remoteRuntimeTimer.unref) remoteRuntimeTimer.unref()
+    const system = detectSystemDsh()
+    if (system) pushLog(`发现系统已安装 ${system.version}`)
+    console.log(`dsh-versions: http://127.0.0.1:${PORT}`)
+    console.log(`dsh-versions data: ${DATA}`)
+    console.log(`dsh-versions home: ${homeDir()}`)
+    void launchStartupPresets(stored.launchPresets).catch((error) => pushLog(`读取自动启动项失败：${error instanceof Error ? error.message : error}`))
+    return `http://127.0.0.1:${PORT}`
+  }
+  throw lastError ?? new Error('没有可用端口')
+}
+
+export async function stopAll() {
+  shuttingDown = true
+  // 退出可能发生在端口探测或设置落盘期间；禁止尚未 spawn 的后台启动在收尾后复活。
+  startupGeneration++
+  // 退出前也要确认子进程真没了：原来杀完就 clear，taskkill 没生效时 dsh 就成了没有父进程的
+  // 孤儿 node.exe——用户看到的就是「进程脱离了启动器」，再打开启动器时它还占着插件文件。
+  const procs = instanceList()
+  for (const link of instanceLinks.values()) {
+    for (const child of link.pending()) procs.push({ version: link.version, profile: link.profile, home: link.home, child, instanceLink: link })
+    link.revokeAdmission()
+  }
+  instanceLinks.clear()
+  for (const proc of procs) proc.status = 'stopping'
+  await Promise.allSettled(procs.map(async (proc) => {
+    if (!(await terminateProcess(proc))) pushLog(`[退出] ${proc.version}/${proc.profile}（PID ${proc.child.pid}）没有退出`)
+    if (instances.get(proc.key)?.child === proc.child) instances.delete(proc.key)
+  }))
+  instances.clear()
+  logWriter.flush()
+  flushLogEvents()
+  for (const res of clients) {
+    try { res.end() } catch { /* already gone */ }
+  }
+  clients.clear()
+  const httpServer = server
+  server = null
+  if (!httpServer) return
+  if (typeof httpServer.closeAllConnections === 'function') {
+    httpServer.closeAllConnections()
+  }
+  await Promise.race([
+    new Promise((resolve) => httpServer.close(() => resolve())),
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ])
+}
+
+if (/server\.js$/i.test(process.argv[1] || '')) {
+  startServer().catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      stopAll().finally(() => process.exit(0))
+    })
+  }
+}

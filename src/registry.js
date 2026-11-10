@@ -1,0 +1,548 @@
+import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { createWriteStream, existsSync } from 'node:fs'
+import { cp, mkdir, open, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { delimiter, dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { fileURLToPath } from 'node:url'
+import { DEFAULTS, DOWNLOAD_SOURCES, loadSettingsSync } from './settings.js'
+import { IN_ELECTRON, IS_WINDOWS, RUNTIME_NODE, RUNTIME_NODE_ENV } from './platform.js'
+// 版本列表、tarball 都走带代理的 fetch（见 proxy.js）；回环地址它自动直连
+import { netFetch, proxyEnv } from './proxy.js'
+// 版本比较在 version.js（零依赖），这里转出去保持老调用方不用改
+import { cmpVer, parseVer } from './version.js'
+import { CORE_VERSION } from './app-version.js'
+
+const APP_ROOT = dirname(fileURLToPath(import.meta.url))
+const LOCAL_NODE = join(APP_ROOT, 'node')
+
+/**
+ * 下载源不再写死：环境变量（开发测试用）> 设置页的下载源 > 默认镜像。
+ * 每次用时现读：设置页切换下载源后不用重启就生效。
+ */
+export function currentRegistry() {
+  const fromEnv = (process.env.npm_config_registry || '').replace(/\/$/, '')
+  if (fromEnv) return fromEnv
+  const name = loadSettingsSync().downloadSource
+  return DOWNLOAD_SOURCES[name] || DOWNLOAD_SOURCES[DEFAULTS.downloadSource]
+}
+const USER_AGENT = `dsh-x/${CORE_VERSION}`
+let npmReady = null
+
+// npm/npx 的 Windows 包装。`node` 落在哪儿随安装方式变：源码运行就是系统 node；打包后
+// node/ 下只有 node.cmd（转调 Electron，见 scripts/pack.mjs），所以按文件名依次找。
+const NPM_CMD = `@ECHO OFF
+SETLOCAL
+SET "NODE_EXE=%~dp0\\node.cmd"
+IF NOT EXIST "%NODE_EXE%" ( SET "NODE_EXE=%~dp0\\node.exe" )
+IF NOT EXIST "%NODE_EXE%" ( SET "NODE_EXE=node" )
+SET "NPM_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npm-cli.js"
+"%NODE_EXE%" "%NPM_CLI_JS%" %*
+`
+
+const NPX_CMD = `@ECHO OFF
+SETLOCAL
+SET "NODE_EXE=%~dp0\\node.cmd"
+IF NOT EXIST "%NODE_EXE%" ( SET "NODE_EXE=%~dp0\\node.exe" )
+IF NOT EXIST "%NODE_EXE%" ( SET "NODE_EXE=node" )
+SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"
+"%NODE_EXE%" "%NPX_CLI_JS%" %*
+`
+
+export { cmpVer, parseVer } from './version.js'
+
+async function registryGet(url) {
+  let last
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const res = await netFetch(url, {
+        headers: {
+          accept: 'application/vnd.npm.install-v1+json, application/json',
+          'user-agent': USER_AGENT,
+        },
+      })
+      if (!res.ok) throw new Error(`registry ${res.status} ${url}`)
+      return await res.json()
+    } catch (error) {
+      last = error
+      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+    }
+  }
+  throw last
+}
+
+/**
+ * npm 的版本历史很大，浏览多个插件后不能永久留在内存里；刷新也要能看到新发布。
+ * 保留短时请求合并，闲置到期主动释放，而不是等下一次访问才清掉。
+ */
+export function createPackumentReader({ get = registryGet, registry = currentRegistry, limit = 16, ttl = 60_000 } = {}) {
+  const cache = new Map()
+  const remove = (key, entry) => {
+    if (cache.get(key) !== entry) return
+    cache.delete(key)
+    clearTimeout(entry.timer)
+  }
+  return async (name, { force = false } = {}) => {
+    const base = registry()
+    const key = `${base}/${name}`
+    const cached = cache.get(key)
+    if (cached && !force) {
+      cache.delete(key)
+      cache.set(key, cached)
+      return cached.pending
+    }
+    // 版本管理里的「检测版本」要立刻看到刚发布的版本：force 时丢掉这条缓存现拉一次，
+    // 不然短时缓存里的旧列表会让用户以为没更新。
+    if (cached) remove(key, cached)
+    const entry = {}
+    entry.pending = Promise.resolve().then(() => get(`${base}/${name.replace('/', '%2f')}`)).catch((error) => {
+      remove(key, entry)
+      throw error
+    })
+    cache.set(key, entry)
+    entry.timer = setTimeout(() => remove(key, entry), ttl)
+    entry.timer.unref?.()
+    while (cache.size > limit) {
+      const oldest = cache.entries().next().value
+      remove(...oldest)
+    }
+    return entry.pending
+  }
+}
+
+export const packument = createPackumentReader()
+
+export async function listPackage(name, options = {}) {
+  const meta = await packument(name, options)
+  const versions = Object.keys(meta.versions || {}).sort((a, b) => {
+    const left = parseVer(a)
+    const right = parseVer(b)
+    if (!left || !right) return 0
+    return cmpVer(right, left)
+  })
+  return { tags: meta['dist-tags'] || {}, versions }
+}
+
+async function fetchToFile(url, dest) {
+  let last
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const res = await netFetch(url, { headers: { 'user-agent': USER_AGENT } })
+      if (!res.ok) throw new Error(`tarball ${res.status} ${url}`)
+      const expected = Number(res.headers.get('content-length')) || 0
+      await pipeline(Readable.fromWeb(res.body), createWriteStream(dest))
+      const fh = await open(dest, 'r')
+      try {
+        const buf = Buffer.alloc(2)
+        const { bytesRead } = await fh.read(buf, 0, 2, 0)
+        const { size } = await fh.stat()
+        if (bytesRead < 2 || buf[0] !== 0x1f || buf[1] !== 0x8b) throw new Error('tarball 不是 gzip')
+        if (size < 22) throw new Error('tarball 为空')
+        if (expected && size !== expected) throw new Error(`tarball 不完整 ${size}/${expected}`)
+      } finally {
+        await fh.close()
+      }
+      return
+    } catch (error) {
+      last = error
+      try { await rm(dest, { force: true }) } catch { /* ignore */ }
+      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+    }
+  }
+  throw last
+}
+
+async function findPackageDir(staging, unpacked) {
+  const ok = async (dir) => {
+    try {
+      const info = await stat(dir)
+      if (!info.isDirectory()) return false
+      const names = await readdir(dir)
+      return names.includes('package.json') || names.length > 0
+    } catch {
+      return false
+    }
+  }
+  if (await ok(join(unpacked, 'package'))) return join(unpacked, 'package')
+  if (await ok(join(staging, 'package'))) return join(staging, 'package')
+  let entries = []
+  try { entries = await readdir(unpacked, { withFileTypes: true }) } catch { entries = [] }
+  const dirs = entries.filter((entry) => entry.isDirectory())
+  if (dirs.length === 1 && await ok(join(unpacked, dirs[0].name))) return join(unpacked, dirs[0].name)
+  if (entries.some((entry) => entry.name === 'package.json')) return unpacked
+  throw new Error(`解包后找不到 package（${entries.map((entry) => entry.name).join(', ') || '空'}）`)
+}
+
+async function extractTarball(url, dest) {
+  const id = randomBytes(8).toString('hex')
+  const staging = join(tmpdir(), `dsh-${id}`)
+  await mkdir(staging, { recursive: true })
+  const archive = join(staging, 'pkg.tgz')
+  const unpacked = join(staging, 'out')
+  await mkdir(unpacked)
+  try {
+    await fetchToFile(url, archive)
+    await new Promise((resolve, reject) => {
+      const child = spawn('tar', ['-x', '-f', archive, '-C', unpacked], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let err = ''
+      child.stderr.on('data', (chunk) => { err += chunk })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`tar 退出码 ${code}${err.trim() ? `: ${err.trim()}` : ''}`))
+      })
+    })
+    const src = await findPackageDir(staging, unpacked)
+    await rm(dest, { recursive: true, force: true })
+    await mkdir(dirname(dest), { recursive: true })
+    await cp(src, dest, { recursive: true })
+  } finally {
+    await rm(staging, { recursive: true, force: true })
+  }
+}
+
+function npmCli(home) {
+  return join(home, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+}
+
+function npmHomes() {
+  return [...new Set([LOCAL_NODE, dirname(RUNTIME_NODE)])]
+}
+
+function foundNpm() {
+  for (const home of npmHomes()) {
+    const cli = npmCli(home)
+    if (existsSync(cli)) return { home, cli }
+  }
+  return null
+}
+
+/** npm 报错里说了等于没说的那几句：收尾语、以及跟着 notarget 一起打印的套话。 */
+const NPM_NOISE = [
+  /A complete log of this run can be found in:/i,
+  /In most cases you or one of your dependencies are requesting/i,
+  /a package version that doesn't exist\.?$/i,
+]
+
+/**
+ * npm 装包失败时给用户看什么：**直接用 npm 自己说的话**（去掉 `npm error ` 前缀和光秃秃的
+ * `code XXX` 行），只把上面那几句套话滤掉 —— 缺哪个包、哪个源 404，它的报错里本来就写着，
+ * 不用我们复述、也不该复述。拿不到真实报错行就返回空串，调用方照旧用最后一行。
+ * 完整输出本来就逐行进了启动器日志，所以这里滤掉不影响排查。
+ */
+export function describeNpmFailure(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  return lines
+    .filter((line) => /^(?:npm )?(?:error|ERR!)/i.test(line))
+    .map((line) => line.replace(/^(?:npm )?(?:error|ERR!)\s*/i, '').trim())
+    .filter((line) => line && !/^code \S+$/i.test(line) && !NPM_NOISE.some((noise) => noise.test(line)))
+    .slice(0, 2)
+    .join('\n')
+}
+
+/**
+ * 跑 npm 的 PATH：postinstall 里写的是裸命令（koffi 的 `node ./cnoke.cjs` 就是），
+ * 而我们是用 RUNTIME_NODE 的**绝对路径**起 npm 的 —— 机器上没装 Node.js 时 PATH 里
+ * 根本没有 node，装到一半就死在 `'node' 不是内部或外部命令`（0.2.1-rc.5 起 koffi 带
+ * 这条脚本，干净的 Windows 上必挂）。
+ *
+ * 补的是打包时的 node/ 目录（node.cmd 转调 Electron 本体按 node 跑）；源码运行没有这个
+ * 目录，就退回跑我们的那个 node 所在的目录。**追加到末尾**：自己装了 Node 的机器行为和
+ * 以前一模一样，自带运行时只当兜底 —— 和 dsh 子进程的 PATH 排序一致（server.js
+ * orderRuntimePaths），用户的工具链仍排在前面。
+ */
+export function withRuntimeNode(pathValue, options = {}) {
+  const {
+    dir = LOCAL_NODE,
+    runtime = RUNTIME_NODE,
+    inElectron = IN_ELECTRON,
+    sep = delimiter,
+    exists = existsSync,
+  } = options
+  // Electron 本体所在目录里没有 node.exe，只有 node/ 那个包装目录能当兜底。
+  // node.exe 只可能是 ≤0.1.19 安装包留下的：它只作为 PATH 兜底目录存在，不再被选成
+  // 跑 dsh 的运行时（那条优先判断已在 platform.js 去掉，见 #89）。
+  const bundled = IS_WINDOWS
+    ? exists(join(dir, 'node.cmd')) || exists(join(dir, 'node.exe'))
+    : exists(join(dir, 'node'))
+  const fallback = bundled ? dir : inElectron ? '' : dirname(runtime)
+  const parts = String(pathValue || '').split(sep).filter(Boolean)
+  if (!fallback || parts.includes(fallback)) return pathValue
+  return [...parts, fallback].join(sep)
+}
+
+function runNpm(cli, args, { cwd, onLog, env } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(RUNTIME_NODE, ['--require', join(APP_ROOT, 'stdio-unblock.cjs'), cli, ...args], {
+      cwd,
+      env: {
+        ...process.env,
+        ...RUNTIME_NODE_ENV,
+        // 生命周期脚本里的裸 `node` 只在 PATH 里找，见 withRuntimeNode
+        PATH: withRuntimeNode(process.env.PATH),
+        // node.cmd 转调 Electron 时认它。外壳早就设过（shell/main.mjs），这里再兜一次：
+        // 核心自更新到用户目录后 node/ 就在 data 下，node.cmd 猜不中 DSH.exe 的位置。
+        ...(IN_ELECTRON ? { DSH_ELECTRON_BIN: process.execPath } : {}),
+        npm_config_registry: currentRegistry(),
+        ...proxyEnv(),
+        npm_config_audit: 'false',
+        npm_config_fund: 'false',
+        npm_config_update_notifier: 'false',
+        npm_config_progress: 'false',
+        npm_config_loglevel: 'http',
+        ...env,
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let err = ''
+    const onChunk = (buf) => {
+      const text = buf.toString('utf8')
+      err += text
+      if (!onLog) return
+      for (const line of text.split(/\r?\n|\r/)) onLog(line)
+    }
+    child.stdout.on('data', onChunk)
+    child.stderr.on('data', onChunk)
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(describeNpmFailure(err) || err.trim().split(/\r?\n/).filter(Boolean).at(-1) || `npm 退出码 ${code}`))
+    })
+  })
+}
+
+async function npmVersion(cli) {
+  let out = ''
+  await runNpm(cli, ['--version'], {
+    env: { npm_config_loglevel: 'silent' },
+    onLog: (line) => { if (line.trim()) out += `${line.trim()}\n` },
+  })
+  return out.trim().split(/\r?\n/).filter((line) => /^\d+\.\d+/.test(line)).at(-1) || out.trim().split(/\r?\n/).at(-1) || ''
+}
+
+async function writeNpmShims(home) {
+  if (process.platform !== 'win32') return
+  await writeFile(join(home, 'npm.cmd'), NPM_CMD)
+  await writeFile(join(home, 'npx.cmd'), NPX_CMD)
+}
+
+async function installNpm(home, version, onLog) {
+  const meta = await packument('npm')
+  const pack = meta.versions?.[version]
+  const tarball = pack?.dist?.tarball
+  if (!tarball) throw new Error(`找不到 npm@${version} 的 tarball`)
+  onLog(`下载 npm@${version}`)
+  await mkdir(home, { recursive: true })
+  await extractTarball(tarball, join(home, 'node_modules', 'npm'))
+  await writeNpmShims(home)
+}
+
+function npmCompatible(version) {
+  const npm = parseVer(version)
+  if (!npm || npm.major < 10) return false
+  const node = parseVer(process.versions.node)
+  if (!node) return npm.major === 10
+  if (npm.major >= 12) {
+    return node.major > 22
+      || (node.major === 22 && (node.minor > 22 || (node.minor === 22 && node.patch >= 2)))
+      || node.major >= 24
+  }
+  return true
+}
+
+async function latestCompatibleNpm() {
+  const meta = await packument('npm')
+  let best = '10.9.3'
+  for (const version of Object.keys(meta.versions || {})) {
+    const parsed = parseVer(version)
+    if (!parsed || parsed.pre || !npmCompatible(version)) continue
+    const current = parseVer(best)
+    if (!current || cmpVer(parsed, current) > 0) best = version
+  }
+  return best
+}
+
+async function ensureNpmOnce(onLog) {
+  const found = foundNpm()
+  const current = found ? await npmVersion(found.cli) : ''
+  if (found && npmCompatible(current)) {
+    onLog(`使用 npm ${current} · ${currentRegistry()}`)
+    return found
+  }
+  const want = await latestCompatibleNpm()
+  if (!found) onLog(`未找到 npm，正在下载 ${want}`, { phase: 'resolve' })
+  else onLog(`npm ${current} 与 Node ${process.versions.node} 不匹配，改用 ${want}`, { phase: 'resolve' })
+  await installNpm(LOCAL_NODE, want, onLog)
+  const next = { home: LOCAL_NODE, cli: npmCli(LOCAL_NODE) }
+  onLog(`npm ${await npmVersion(next.cli)} · ${currentRegistry()}`)
+  return next
+}
+
+export function ensureNpm(onLog = () => {}) {
+  if (!npmReady) npmReady = ensureNpmOnce(onLog).catch((error) => {
+    npmReady = null
+    throw error
+  })
+  return npmReady
+}
+
+function pkgFromTarballUrl(url) {
+  const match = String(url).match(/\/(?:(@[^/]+)\/)?([^/]+)\/-\/\2-([^/?]+)\.tgz/)
+  if (!match) return ''
+  return `${match[1] ? `${match[1]}/` : ''}${match[2]}@${match[3]}`
+}
+
+function pkgFromCacheSpec(spec) {
+  return pkgFromTarballUrl(spec) || spec.replace(/@https?:.*$/, '') || spec
+}
+
+function parseInstallProgress(line, state) {
+  const cache = line.match(/http cache\s+(\S+)\s+\d+ms \(cache hit\)/i)
+  if (cache) {
+    const spec = cache[1]
+    if (/\.tgz(?:\?|$)/i.test(spec) || /\/-\//.test(spec)) {
+      state.fetched += 1
+      if (!state.total) state.total = Math.max(state.resolved, state.fetched)
+      else state.total = Math.max(state.total, state.fetched)
+      return { phase: 'download', done: state.fetched, total: state.total, pkg: pkgFromCacheSpec(spec) }
+    }
+    state.resolved += 1
+    if (state.fetched) {
+      state.total = Math.max(state.total, state.resolved, state.fetched)
+      return { phase: 'download', done: state.fetched, total: state.total }
+    }
+    return { phase: 'resolve', done: state.resolved }
+  }
+  const http = line.match(/http fetch GET \d+\s+(\S+)/i)
+  if (http) {
+    const url = http[1]
+    if (/\.tgz(?:\?|$)/i.test(url)) {
+      state.fetched += 1
+      if (!state.total) state.total = Math.max(state.resolved, state.fetched)
+      else state.total = Math.max(state.total, state.fetched)
+      return { phase: 'download', done: state.fetched, total: state.total, pkg: pkgFromTarballUrl(url) }
+    }
+    state.resolved += 1
+    if (state.fetched) {
+      state.total = Math.max(state.total, state.resolved, state.fetched)
+      return { phase: 'download', done: state.fetched, total: state.total }
+    }
+    return { phase: 'resolve', done: state.resolved }
+  }
+  const added = line.match(/added (\d+) packages?/i)
+  if (added) {
+    state.total = Number(added[1])
+    state.fetched = state.total
+    return { phase: 'download', done: state.fetched, total: state.total }
+  }
+  return null
+}
+
+/**
+ * pnpm 的进度行（非 TTY 时用的是 append-only reporter，长这样）：
+ *   Packages: +123
+ *   Progress: resolved 12, reused 0, downloaded 0, added 0
+ * 插件安装/升级走的是 dsh 内部的 pnpm，输出和 npm 那套（parseInstallProgress）不一样，
+ * 这里单独认。返回和 npm 那套同形状的进度，页面用同一个进度条画。
+ */
+export function parsePnpmProgress(line, state) {
+  const packages = /^Packages:\s*\+(\d+)/i.exec(line)
+  if (packages) {
+    state.total = Number(packages[1])
+    return null // 只是报了总数，等 Progress 行再出进度
+  }
+  const progress = /Progress:\s*resolved (\d+),\s*reused (\d+),\s*downloaded (\d+),\s*added (\d+)/i.exec(line)
+  if (!progress) return null
+  state.resolved = Number(progress[1])
+  state.reused = Number(progress[2])
+  state.downloaded = Number(progress[3])
+  state.added = Number(progress[4])
+  if (state.added) {
+    // 已经在写入 node_modules：用「要装多少个」当分母，进度条才是真比例
+    return { phase: 'download', done: state.added, total: Math.max(state.total, state.resolved, state.added) }
+  }
+  // 还在解析依赖图：没有确定的分子分母，交给页面用饱和曲线显示
+  return { phase: 'resolve', done: state.resolved }
+}
+
+export async function installSpec(root, name, range, onLog = () => {}) {
+  const { cli } = await ensureNpm(onLog)
+  await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'package.json'), `${JSON.stringify({
+    private: true,
+    name: 'dsh-version',
+    version: '0.0.0',
+  }, null, 2)}\n`)
+  await writeFile(join(root, '.npmrc'), `registry=${currentRegistry()}\naudit=false\nfund=false\nupdate-notifier=false\nprogress=false\n`)
+  onLog(`npm install ${name}@${range}`, { phase: 'resolve' })
+  const state = { resolved: 0, fetched: 0, total: 0 }
+  let lastShown = 0
+  let lastResolve = -1
+  const pulse = setInterval(() => {
+    if (state.fetched) {
+      onLog(`已安装 ${state.fetched}/${state.total || state.fetched} 个包`, {
+        phase: 'download',
+        done: state.fetched,
+        total: state.total || state.fetched,
+      })
+      return
+    }
+    onLog(state.resolved ? `已解析 ${state.resolved} 个依赖，仍在安装…` : '正在解析依赖…', {
+      phase: 'resolve',
+      done: state.resolved,
+    })
+  }, 2500)
+  try {
+  await runNpm(cli, [
+    'install',
+    `${name}@${range}`,
+    '--prefer-dedupe',
+    '--save-exact',
+    '--omit=dev',
+    '--no-audit',
+    '--no-fund',
+    '--package-lock=false',
+    '--loglevel=http',
+    '--no-progress',
+  ], {
+    cwd: root,
+    onLog: (line) => {
+      const text = String(line).replace(/\s+$/, '')
+      const progress = parseInstallProgress(text, state)
+      const important = /^(?:npm warn|npm error|npm ERR!)|(?:^|\s)ERR!|added \d+ packages?/i.test(text)
+      const now = Date.now()
+      if (progress?.phase === 'download' && (progress.done === 1 || progress.done === progress.total || progress.done % 10 === 0)) {
+        lastShown = now
+        onLog(`已安装 ${progress.done}/${progress.total} ${progress.pkg || ''}`.trim(), progress)
+      } else if (progress?.phase === 'resolve' && progress.done && (progress.done !== lastResolve && (progress.done % 10 === 0 || now - lastShown > 800))) {
+        lastResolve = progress.done
+        lastShown = now
+        onLog(`已解析 ${progress.done} 个依赖`, progress)
+      } else if (important && text) {
+        lastShown = now
+        onLog(text, progress || undefined)
+      } else if (progress) {
+        onLog('', progress)
+      }
+    },
+  })
+  } finally {
+    clearInterval(pulse)
+  }
+}
+
+/**
+ * 只重排已装依赖：离线、不跑生命周期脚本、不改直接依赖的版本范围。
+ * 交给 npm 校验依赖与 peer 约束，不能自己按包名删目录或合并不同版本。
+ */
+export async function optimizeDependencies(root, onLog = () => {}) {
+  const { cli } = await ensureNpm(onLog)
+  await runNpm(cli, ['dedupe', '--offline', '--ignore-scripts', '--omit=dev',
+    '--no-audit', '--no-fund', '--package-lock=false', '--no-progress'], { cwd: root, onLog })
+}

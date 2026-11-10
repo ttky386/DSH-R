@@ -1,0 +1,11 @@
+data/
+node/
+node_modules/
+release/
+/vendor/
+*.log
+__pycache__/
+.DS_Store
+src/assets/dsh-preview.png
+# 宣传片是生成产物（node scripts/make-promo.mjs），走 release 资产分发，不入库
+docs/promo.mp4

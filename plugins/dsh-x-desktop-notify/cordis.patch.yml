@@ -1,0 +1,16 @@
+# dsh-x-desktop-notify bundle patch: one host row over the web profile.
+# The row name resolves from the profile's own node_modules where
+# `dsh plugin --profile web add dsh-x-desktop-notify` installed this package.
+#
+# Optional config (uncomment to override; every key has a default):
+# - insert:
+#     - id: x-desktop-notify
+#       name: dsh-x-desktop-notify
+#       config:
+#         onTurnEnd: true        # 一轮结束时提醒
+#         onApproval: true       # 工具等用户确认时提醒
+#         includeSubagents: false # 子代理的轮次也提醒（默认只提醒顶层会话）
+#         notifyOnAborted: false  # 用户自己中止的轮次也提醒
+- insert:
+    - id: x-desktop-notify
+      name: dsh-x-desktop-notify

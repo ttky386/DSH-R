@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: DSH 本体的问题
+    url: https://github.com/deepseek-ai/deepseek-harness/issues
+    about: 页面、模型、会话、插件 API 属于上游仓库；DSH-X 只负责把官方页面拉起来
+  - name: 安全问题
+    url: https://github.com/yyh-001/DSH-X/security/advisories/new
+    about: 私密报告，别开公开 issue

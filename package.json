@@ -1,0 +1,46 @@
+{
+  "name": "dsh-x",
+  "productName": "DSH",
+  "version": "0.1.26-rc.4",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness 桌面启动器：启动项与多实例，版本、插件、整合包、MCP 和技能管理。",
+  "main": "src/start.js",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node src/start.js",
+    "server": "node src/server.js",
+    "electron": "electron shell/main.mjs",
+    "stage:core": "node scripts/pack.mjs --stage-only",
+    "test": "node --test",
+    "dist": "node scripts/pack.mjs",
+    "release:manifest": "node scripts/release-manifest.mjs make",
+    "release:sbom": "node scripts/release-sbom.mjs",
+    "release:verify": "node scripts/release-manifest.mjs verify",
+    "release:check": "node scripts/release-manifest.mjs check-tag"
+  },
+  "author": "yyh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyh-001/DSH-X.git"
+  },
+  "homepage": "https://yyh-001.github.io/DSH-X/",
+  "bugs": {
+    "url": "https://github.com/yyh-001/DSH-X/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "launcher",
+    "electron"
+  ],
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.7.0",
+    "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11"
+  }
+}

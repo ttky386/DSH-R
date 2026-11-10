@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254">
+  <defs><linearGradient id="hair" x1=".15" y1="0" x2=".9" y2="1"><stop stop-color="#242426"/><stop offset=".6" stop-color="#414144"/><stop offset="1" stop-color="#242426"/></linearGradient></defs>
+  <path d="M198 88C285 -21 464 -1 549 82C625 159 575 249 468 283C508 203 462 122 396 87C328 49 259 51 198 88Z" fill="url(#hair)"/>
+  <path d="M198 88C267 46 337 55 399 87C468 126 506 204 468 283C491 205 448 130 389 99C320 64 255 68 198 88Z" fill="#141416" opacity=".7"/>
+</svg>

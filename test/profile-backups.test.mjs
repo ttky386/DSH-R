@@ -1,0 +1,83 @@
+/**
+ * Profile 配置层备份：快照去重、列表、回退和参数校验。
+ * 备份的是 profile 目录里的配置文件（package.json / cordis.patch.yml / .npmrc 等），
+ * node_modules 不进来；回退前服务端会先把当前状态再存一份，所以退错了还能再退回来。
+ */
+import assert from 'node:assert/strict'
+import { isolateUserHome } from './isolated-home.mjs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+
+test('Profile 配置层备份：快照去重、列表、回退与参数校验', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-backups-'))
+  const app = isolateUserHome(root)
+  const home = join(root, 'home')
+  const data = join(root, 'data')
+  const probe = createServer()
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve))
+  const port = probe.address().port
+  await new Promise((resolve) => probe.close(resolve))
+  mkdirSync(app, { recursive: true })
+  const profile = join(home, 'profiles', 'web')
+  mkdirSync(profile, { recursive: true })
+  writeFileSync(join(profile, 'package.json'), JSON.stringify({ private: true, dsh: { profile: { bundles: [] } } }))
+  writeFileSync(join(profile, 'cordis.patch.yml'), '- id: demo\n  disabled: false\n')
+  writeFileSync(join(app, 'settings.json'), JSON.stringify({ dataDir: data, dshHome: home, profile: 'web', seedMarket: false }))
+  process.env.APPDATA = root
+  process.env.PORT = String(port)
+  process.env.DSH_VERSIONS_DATA = data
+  process.env.DSH_AGENTS_HOME = join(root, 'agents')
+  const server = await import('../src/server.js')
+  const base = await server.startServer()
+  t.after(async () => {
+    await server.stopAll()
+    try { rmSync(root, { recursive: true, force: true }) } catch { /* 留给系统临时目录清理 */ }
+  })
+  async function api(path, body) {
+    const res = await fetch(base + path, body === undefined ? undefined : {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const result = await res.json()
+    return { status: res.status, ...result }
+  }
+
+  let firstId = ''
+  await t.test('第一次快照落盘，重复快照按内容去重', async () => {
+    const first = await api('/api/profile-backups/snapshot', { profile: 'web' })
+    assert.ok(first.backup, '第一次快照应该生成备份')
+    firstId = first.backup.id
+    assert.ok(first.backup.files.some((file) => file.name === 'cordis.patch.yml'))
+    assert.ok(first.backup.files.some((file) => file.name === 'package.json'))
+    assert.equal(first.backup.files.some((file) => /node_modules/.test(file.name)), false, 'node_modules 不进备份')
+    const again = await api('/api/profile-backups/snapshot', { profile: 'web' })
+    assert.equal(again.backup, null, '内容没变时不该堆新备份')
+    const list = await api('/api/profile-backups?profile=web')
+    assert.equal(list.backups.length, 1)
+    assert.equal(list.backups[0].id, firstId)
+  })
+
+  await t.test('改坏配置后生成新快照，回退能把旧内容改回来', async () => {
+    writeFileSync(join(profile, 'cordis.patch.yml'), '- id: demo\n  disabled: true\n')
+    const snapshot = await api('/api/profile-backups/snapshot', { profile: 'web' })
+    assert.ok(snapshot.backup)
+    const list = await api('/api/profile-backups?profile=web')
+    assert.equal(list.backups.length, 2)
+    const restored = await api('/api/profile-backups/restore', { profile: 'web', id: firstId })
+    assert.equal(restored.restored, firstId)
+    assert.ok(restored.backup, '回退前应该先把当前（坏）状态存一份')
+    assert.equal(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8'), '- id: demo\n  disabled: false\n')
+    const after = await api('/api/profile-backups?profile=web')
+    assert.ok(after.backups.length >= 3, '回退前应先把当前（坏）状态也存一份')
+  })
+
+  await t.test('非法 profile / id 不会碰目录，也不炸服务', async () => {
+    assert.equal((await api('/api/profile-backups?profile=../web')).status, 400)
+    assert.equal((await api('/api/profile-backups?profile=web&id=../../x')).status, 400)
+    assert.equal((await api('/api/profile-backups/snapshot', { profile: '' })).status, 400)
+    assert.equal((await api('/api/profile-backups/restore', { profile: 'web', id: '20000101-000000' })).status, 404)
+    assert.equal((await api('/api/profile-backups/restore', { profile: 'web', id: '../x' })).status, 400)
+  })
+})

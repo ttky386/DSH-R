@@ -1,0 +1,21 @@
+# 编辑器不必装插件也能对齐格式；这个仓库没有 lint / 格式化工具，靠它兜住基本一致性。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown 靠行尾两个空格换行，不能裁。
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 的 .cmd / .ps1 用 CRLF 更稳（cmd 对 LF 的批处理有坑）。
+[*.{cmd,bat,ps1}]
+end_of_line = crlf
+
+[*.py]
+indent_size = 4

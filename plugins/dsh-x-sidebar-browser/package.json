@@ -1,0 +1,55 @@
+{
+  "name": "dsh-x-sidebar-browser",
+  "version": "0.1.1",
+  "description": "First-party DSH-X agent tools for the official right-Sidebar Browser (native Electron webview): snapshot, click, type, press, scroll, evaluate, screenshot.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "compatibility": {
+      "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    }
+  },
+  "meta": {
+    "title": "侧栏浏览器",
+    "description": "让智能体操作 DSH-X 右侧栏的官方浏览器：读取页面、点击、输入、截图。"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "license": "MIT",
+  "author": "yyh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyh-001/DSH-X.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-x",
+    "sidebar",
+    "browser",
+    "agent-tool"
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "name": "dsh-x-context-menu",
+  "version": "0.1.1",
+  "description": "给 dsh 网页界面加一套右键菜单：会话行、工作区行、正文选中文字、链接、输入框。重命名/置顶/分叉/归档/新建会话走官方服务，在资源管理器中打开和打开外链走本插件的环回路由；不依赖任何桌面壳。Right-click menus for the dsh web UI — sessions, workspaces, selected text, links and inputs — on top of the official services, with no desktop shell required.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "meta": {
+    "title": "右键菜单",
+    "description": "给会话行、工作区行、选中文字、链接和输入框加一套右键菜单。"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "context-menu",
+    "right-click",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0"
+    }
+  },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "DSH-X Context Menu",
+    "summary": "右键会话行：重命名、置顶、分叉、归档、复制标题/ID/工作目录、在资源管理器中打开；右键工作区行：新建会话、复制名称/路径；正文选中文字与链接、输入框也各有一套。菜单自绘，跟 dsh 主题同色。",
+    "categories": [
+      "界面",
+      "桌面"
+    ],
+    "homepage": "https://github.com/yyh-001/DSH-X"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyh-001/DSH-X.git"
+  },
+  "author": "yyh",
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0"
+  }
+}

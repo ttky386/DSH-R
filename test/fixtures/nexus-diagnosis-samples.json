@@ -1,0 +1,471 @@
+{
+  "source": "Nexus compatibility.test.mjs: startup signatures, activation states and skipped bundles; MIT Copyright (c) 2026 Nexus contributors",
+  "samples": [
+    {
+      "fn": "diagnoseStartup",
+      "input": "profile \"desktop\" is managed exclusively by the Electron application",
+      "expected": {
+        "code": "profile_restriction",
+        "summary": "Profile reserved by Harness",
+        "remedy": "Select a regular profile or a compatible Harness version.",
+        "evidence": [
+          "profile \"desktop\" is managed exclusively by the Electron application"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "profiles"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "duplicate loader entry id: upload",
+      "expected": {
+        "code": "duplicate_entry",
+        "summary": "Conflicting plugin entry ID",
+        "remedy": "Inspect the declaring bundles and disable or adjust one conflicting third-party plugin.",
+        "evidence": [
+          "duplicate loader entry id: upload"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: failed to parse config /profile/cordis.yml: bad token",
+      "expected": {
+        "code": "configuration",
+        "summary": "Invalid or unreadable configuration",
+        "remedy": "Repair the named configuration or patch file; preserve a backup before editing.",
+        "evidence": [
+          "dsh: failed to parse config /profile/cordis.yml: bad token"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "Desktop profile JSON is invalid. Repair this file and retry: /profiles/desktop/package.json",
+      "expected": {
+        "code": "configuration",
+        "summary": "Invalid or unreadable configuration",
+        "remedy": "Repair the named configuration or patch file; preserve a backup before editing.",
+        "evidence": [
+          "Desktop profile JSON is invalid. Repair this file and retry: /profiles/desktop/package.json"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: patches /profile/a.yml must be a top-level YAML array of loader patch entries",
+      "expected": {
+        "code": "configuration",
+        "summary": "Invalid or unreadable configuration",
+        "remedy": "Repair the named configuration or patch file; preserve a backup before editing.",
+        "evidence": [
+          "dsh: patches /profile/a.yml must be a top-level YAML array of loader patch entries"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: cannot resolve profile bundle \"third-party\" from the dsh installation",
+      "expected": {
+        "code": "missing_bundle",
+        "summary": "Profile bundle is missing or invalid",
+        "remedy": "Repair the selected profile dependencies or select a package that declares a Harness bundle.",
+        "evidence": [
+          "dsh: cannot resolve profile bundle \"third-party\" from the dsh installation"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "does not provide an export named tools",
+      "expected": {
+        "code": "module_api",
+        "summary": "Package or runtime interface is incompatible",
+        "remedy": "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.",
+        "evidence": [
+          "does not provide an export named tools"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "Error: typert: @example/archive-addon#workspaceRegistry/unarchiveSession result strict codec has no create() factory",
+      "expected": {
+        "code": "module_api",
+        "summary": "Package or runtime interface is incompatible",
+        "remedy": "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.",
+        "evidence": [
+          "Error: typert: @example/archive-addon#workspaceRegistry/unarchiveSession result strict codec has no create() factory"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "Cannot find package 'missing' imported from /plugin/index.js",
+      "expected": {
+        "code": "missing_module",
+        "summary": "Required module is missing",
+        "remedy": "Use the importer path to locate the missing dependency in the Harness installation or profile. Check local package files and links before reinstalling; do not disable waiting plugins.",
+        "evidence": [
+          "Cannot find package 'missing' imported from /plugin/index.js"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "profile resolution mismatch for \"pkg\" from /source: disk selected nothing",
+      "expected": {
+        "code": "module_layout",
+        "summary": "Installed module layout conflicts with Harness",
+        "remedy": "Stop Harness and repair the profile dependency installation. Preserve conflicting files before replacing them.",
+        "evidence": [
+          "profile resolution mismatch for \"pkg\" from /source: disk selected nothing"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "profile resolution: replacing \"pkg\" requires a process restart",
+      "expected": {
+        "code": "restart_required",
+        "summary": "Dependency changes require a restart",
+        "remedy": "Stop Harness completely and start it again to load the new dependency generation.",
+        "evidence": [
+          "profile resolution: replacing \"pkg\" requires a process restart"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "logs"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "cannot resolve entry missing-entry",
+      "expected": {
+        "code": "patch_target",
+        "summary": "Patch refers to an unavailable entry",
+        "remedy": "Update or disable the named patch for this Harness version; do not disable unrelated plugins.",
+        "evidence": [
+          "cannot resolve entry missing-entry"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "listen EADDRINUSE: address already in use",
+      "expected": {
+        "code": "port_conflict",
+        "summary": "Listening port is occupied",
+        "remedy": "Choose another port or stop the known application using it.",
+        "evidence": [
+          "listen EADDRINUSE: address already in use"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "EPERM: operation not permitted, open /config",
+      "expected": {
+        "code": "permission",
+        "summary": "File or port access was denied",
+        "remedy": "Check access to the named path or port and file locks; do not delete data to bypass the error.",
+        "evidence": [
+          "EPERM: operation not permitted, open /config"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: startup failed: 1 required plugin did not activate\nPlugins waiting for services (1):\nserver (required) database",
+      "expected": {
+        "code": "required_services",
+        "summary": "Required services did not become available",
+        "remedy": "Inspect the missing service names and their provider plugins; repair the provider rather than disabling the waiting consumer.",
+        "evidence": [
+          "Plugins waiting for services (1):"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: startup failed: 1 required plugin did not activate\nFailed plugins (1):\n a (required)\n Package: third-party",
+      "expected": {
+        "code": "plugin_activation",
+        "summary": "Plugin activation failed",
+        "remedy": "Inspect the reported package and its original cause before choosing a compatible version or disabling it.",
+        "evidence": [
+          "dsh: startup failed: 1 required plugin did not activate"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "error: --profile needs a name",
+      "expected": {
+        "code": "runtime_arguments",
+        "summary": "Harness launch arguments are invalid",
+        "remedy": "Correct the profile or launch arguments for the selected Harness version.",
+        "evidence": [
+          "error: --profile needs a name"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "settings"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "dsh: installed package pkg must declare a non-empty version",
+      "expected": {
+        "code": "package_manifest",
+        "summary": "Installed package metadata is invalid",
+        "remedy": "Repair or replace the named package with a complete published version.",
+        "evidence": [
+          "dsh: installed package pkg must declare a non-empty version"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "plugins"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "Compatibility probe timed out",
+      "expected": {
+        "code": "readiness_timeout",
+        "summary": "Harness did not become ready in time",
+        "remedy": "Inspect the startup log and pending services; a timeout alone does not identify a faulty plugin.",
+        "evidence": [
+          "Compatibility probe timed out"
+        ],
+        "level": "blocking",
+        "certainty": "matched_signature",
+        "help": "logs"
+      }
+    },
+    {
+      "fn": "diagnoseStartup",
+      "input": "Something unexpected happened",
+      "expected": {
+        "code": "unknown",
+        "summary": "Harness startup failed; cause not yet identified",
+        "remedy": "Keep the original error and startup log. Do not disable plugins without evidence.",
+        "evidence": [
+          "Something unexpected happened"
+        ],
+        "level": "blocking",
+        "certainty": "unconfirmed",
+        "help": "logs"
+      }
+    },
+    {
+      "fn": "parseActivation",
+      "input": "dsh: warning: 3 entries did not activate\nstore (@deepseek-ai/dsh-store): failed to import\nchat (@deepseek-ai/dsh-client-ui-chat): pending (waiting for service: sessions)\njobs (@deepseek-ai/dsh-client-ui-jobs): pending (waiting for services: sessions, uiWorkspace)",
+      "expected": {
+        "entries": [
+          {
+            "id": "store",
+            "package": "@deepseek-ai/dsh-store",
+            "state": "failed",
+            "reason": "failed to import",
+            "missing": []
+          },
+          {
+            "id": "chat",
+            "package": "@deepseek-ai/dsh-client-ui-chat",
+            "state": "pending",
+            "reason": "pending (waiting for service: sessions)",
+            "missing": [
+              "sessions"
+            ]
+          },
+          {
+            "id": "jobs",
+            "package": "@deepseek-ai/dsh-client-ui-jobs",
+            "state": "pending",
+            "reason": "pending (waiting for services: sessions, uiWorkspace)",
+            "missing": [
+              "sessions",
+              "uiWorkspace"
+            ]
+          }
+        ],
+        "missing_services": [
+          "sessions",
+          "uiWorkspace"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseActivation",
+      "input": "web boot: 1 entry did not activate\nchat: pending (waiting for service: sessions)",
+      "expected": {
+        "entries": [
+          {
+            "id": "chat",
+            "package": "chat",
+            "state": "pending",
+            "reason": "pending (waiting for service: sessions)",
+            "missing": [
+              "sessions"
+            ]
+          }
+        ],
+        "missing_services": [
+          "sessions"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseActivation",
+      "input": "dsh: required startup failure: 1 entry did not activate\nboot (@deepseek-ai/dsh-boot): Error: broke\n    at boot (file:///slot/lib/index.js:10:3)",
+      "expected": {
+        "entries": [
+          {
+            "id": "boot",
+            "package": "@deepseek-ai/dsh-boot",
+            "state": "failed",
+            "reason": "Error: broke",
+            "missing": []
+          }
+        ],
+        "missing_services": [],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseActivation",
+      "input": "",
+      "expected": null
+    },
+    {
+      "fn": "parseActivation",
+      "input": "dsh: warning: 0 entries did not activate",
+      "expected": null
+    },
+    {
+      "fn": "parseActivation",
+      "input": "dsh: startup failed: 1 required plugin did not activate\n\nFailed plugins (1):\n  archive (required)\n    Package: @example/archive/workspace\n    apply: Error: strict codec has no create() factory\n\nPlugins waiting for services (2):\n  Plugin                 Missing services\n  session (required)     workspaceRegistry, fileUploads\n  chat                   sessions",
+      "expected": {
+        "entries": [
+          {
+            "id": "archive",
+            "package": "@example/archive/workspace",
+            "state": "failed",
+            "reason": "apply: Error: strict codec has no create() factory",
+            "missing": []
+          },
+          {
+            "id": "session",
+            "package": "session",
+            "state": "pending",
+            "reason": "pending (waiting for services: workspaceRegistry, fileUploads)",
+            "missing": [
+              "workspaceRegistry",
+              "fileUploads"
+            ]
+          },
+          {
+            "id": "chat",
+            "package": "chat",
+            "state": "pending",
+            "reason": "pending (waiting for services: sessions)",
+            "missing": [
+              "sessions"
+            ]
+          }
+        ],
+        "missing_services": [
+          "workspaceRegistry",
+          "fileUploads",
+          "sessions"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseSkippedBundles",
+      "input": "plugin: arbitrary error\ndsh: skipping profile bundle unquoted: broken",
+      "expected": {
+        "entries": [],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseSkippedBundles",
+      "input": "dsh desktop host: skipping profile bundle \"addon\\\"name\": 不兼容",
+      "expected": {
+        "entries": [
+          {
+            "package": "addon\"name",
+            "reason": "不兼容"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "fn": "parseSkippedBundles",
+      "input": "dsh: skipping profile bundle \"addon\": first\n\nsecond\n",
+      "expected": {
+        "entries": [
+          {
+            "package": "addon",
+            "reason": "first"
+          }
+        ],
+        "truncated": true
+      }
+    }
+  ],
+  "provenance": {
+    "crates/nexus-agent/src/startup-diagnosis.mjs": "3fc9ef833b1650573921d06948b5816c5e2e41a055b3dc75aa36ff534656d461",
+    "crates/nexus-agent/src/compatibility.mjs": "da087ee626de23de33bc3649115de9041f8de6e37b19a56c3d81ee8319703191",
+    "crates/nexus-agent/tests/compatibility.test.mjs": "7271c4b8b1e10d90a70de24227466f7a72cbe23f15a904d090f2e71621ec208d"
+  }
+}

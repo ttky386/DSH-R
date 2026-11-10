@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Native notifications",
+    "description": "System notifications when a turn ends or a tool waits for your approval; also lends desktop capabilities to other plugins."
+  }
+}

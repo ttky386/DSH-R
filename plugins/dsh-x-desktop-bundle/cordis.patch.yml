@@ -1,0 +1,16 @@
+# dsh-x-desktop-bundle：DSH-X 桌面插件组的层栈。
+#
+# 组里每个成员都是独立 npm 包，也各自带 dsh.bundle.patch。**只在组清单里挂一次**：
+# 成员作为本包的依赖装进来，但不进 profile 的 dsh.profile.bundles——否则同一个行会被
+# 挂两遍。dsh 的 bundle 重算只看 profile 的直接依赖（dsh-plugin-manager 的 reconcile），
+# 所以用户只加 dsh-x-desktop-bundle 时，成员不会被自动加进层栈。
+#
+# 加成员 = 两条：
+#   1. package.json 的 dependencies 加一行（版本钉 ^x.y.z）；
+#   2. 这个文件里加一段 insert，把成员自己的 row 抄过来（id 保持成员包里的 id）。
+- insert:
+    - id: x-desktop-notify
+      name: dsh-x-desktop-notify
+      # 可选：覆盖 dsh-x-desktop-notify 的默认配置（见它的 cordis.patch.yml）
+      # config:
+      #   includeSubagents: false

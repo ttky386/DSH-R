@@ -1,0 +1,38 @@
+/* Layered character rig. The UI cards stay above the character. */
+.backdrop-character { display: none; }
+.mascot {
+  position: fixed; left: -7vh; bottom: -13vh;
+  width: min(70vh, 48vw); aspect-ratio: 1;
+  z-index: 2; pointer-events: none;
+  animation: mascot-arrive 900ms cubic-bezier(.16, 1, .3, 1) backwards;
+}
+@keyframes mascot-arrive {
+  0% { opacity: 0; transform: translate(-34%, 28%) scale(.92) rotate(-3deg); }
+  68% { opacity: 1; transform: translate(1.8%, -1.2%) scale(1.012) rotate(.35deg); }
+  84% { transform: translate(-.7%, .4%) scale(.997) rotate(-.12deg); }
+  100% { opacity: 1; transform: none; }
+}
+.mascot-puppet {
+  display: block; width: 100%; height: 100%; padding: 0; border: 0;
+  background: none; color: inherit; pointer-events: auto; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mascot-puppet:active { cursor: pointer; }
+.mascot-puppet:focus-visible { outline: 2px solid #3b6fe0; outline-offset: -14px; border-radius: 45%; }
+.mascot svg { display: block; width: 100%; height: 100%; overflow: visible; opacity: .78; }
+.mascot [data-part] { will-change: transform; }
+header, main { z-index: 3; }
+main, .page { pointer-events: none; }
+.page > * { pointer-events: auto; }
+@media (max-width: 600px) {
+  .mascot { width: 64vw; bottom: -5vw; }
+  .mascot svg { opacity: .58; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mascot { animation: none; }
+}
+/* Pale pool water stays below the mascot and opaque control cards. */
+.backdrop { background: radial-gradient(ellipse at 25% 10%, #f1fbff, #d9eaf7 65%, #d2e3f5); }
+.backdrop::before, .backdrop::after { display: none; }
+.water-surface { display: block; width: 100%; height: 100%; pointer-events: none; opacity: .78; }
+.water-surface[hidden] { display: none; }

@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 5,
+  "type": "profile",
+  "name": "dsh-x-workbench",
+  "displayName": "DSH-X 桌面工作台",
+  "version": "1.0.0",
+  "description": "把 dsh-tauri 桌面版最常用的几项能力在纯 dsh 生态里凑齐，再带上 ZCode 的两份通用技能。五件插件：dsh-better-sidebar —— 右侧栏完整工作台（文件树/编辑器、终端、Git 变更与提交图、子代理）；@cerbur/clutch-dsh-worktree —— 按 Workspace → Worktree → Session 分组的 Git 工作树视图；dsh-plugin-cron-scheduler —— 定时任务，到点向会话注入一条 user 消息触发完整 agent 轮次；dsh-archived-conversations —— 设置页里的已归档对话列表与只读预览；dsh-plugin-notify-sounds —— 需要你决策或任务完成时的提示音与系统通知。两份技能：agent-browser（浏览器自动化 CLI）与 electron（通过 CDP 驱动 Electron 应用，也适用于 DSH-X 自己的 Electron 壳），装进 ~/.dsh/skills，所有 profile 共用。装它 = 得到一个独立 profile（默认名 workbench），和现有环境互不打扰。",
+  "author": "yyh",
+  "license": "MIT",
+  "homepage": "https://github.com/yyh-001/DSH-X",
+  "category": "desktop",
+  "dshVersion": ">=0.2.1-rc.1 <0.3.0-0",
+  "profileName": "workbench",
+  "keywords": [
+    "dsh-pack",
+    "desktop",
+    "workbench",
+    "skills"
+  ],
+  "dependencies": {
+    "dsh-better-sidebar": "^0.28.2",
+    "@cerbur/clutch-dsh-worktree": "^0.1.19",
+    "dsh-plugin-cron-scheduler": "^0.2.10",
+    "dsh-archived-conversations": "^0.3.2",
+    "dsh-plugin-notify-sounds": "^1.9.0"
+  },
+  "bundles": [
+    "dsh-better-sidebar",
+    "@cerbur/clutch-dsh-worktree",
+    "dsh-plugin-cron-scheduler",
+    "dsh-archived-conversations",
+    "dsh-plugin-notify-sounds"
+  ],
+  "conflicts": []
+}

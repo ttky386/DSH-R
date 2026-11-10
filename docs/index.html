@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DSH-X</title>
+  <meta name="description" content="DeepSeek Harness 桌面启动器。管理启动项、多实例、插件、整合包、MCP 与技能。" />
+  <link rel="icon" href="./favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" href="./favicon.png" />
+  <script>document.documentElement.dataset.colorScheme = localStorage.getItem('dsh-x-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')</script>
+  <link rel="stylesheet" href="./landing.css" />
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true">
+    <canvas class="water-surface" aria-hidden="true"></canvas>
+    <div class="backdrop-character"></div>
+  </div>
+  <div class="wrap">
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="DSH-X"><img src="./icon-app.png" alt="" /><span class="brand-name">DSH-X</span><span class="brand-caption" data-zh="桌面启动器" data-en="Desktop launcher">桌面启动器</span></a>
+      <div class="header-actions">
+      <a class="gh" href="https://github.com/yyh-001/DSH-X" id="gh" aria-label="GitHub">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.57-.3-5.28-1.29-5.28-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.06 0 0 .96-.31 3.16 1.18a10.9 10.9 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.62 1.59.23 2.77.11 3.06.74.81 1.18 1.84 1.18 3.1 0 4.42-2.71 5.39-5.29 5.68.42.36.78 1.07.78 2.15v3.27c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
+        <span class="gh-name">GitHub</span>
+        <span class="stars" id="stars" title="GitHub stars">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>
+          <span id="star-count">Star</span>
+        </span>
+      </a>
+      <button class="icon-control" id="theme" type="button" aria-label="切换到深色模式" title="切换到深色模式">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.6 8.6 0 0 1 9.5 3.5 8.7 8.7 0 1 0 20.5 14.5Z"/></svg>
+      </button>
+      <button class="lang" id="lang" type="button" aria-label="切换语言 / Switch language"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.6 5.5 3.6 9S14.5 18.5 12 21c-2.5-2.5-3.6-5.5-3.6-9S9.5 5.5 12 3Z"/></svg><span id="lang-label">EN</span></button>
+      </div>
+    </header>
+  </div>
+  <main class="wrap stage" id="top">
+    <div class="copy">
+      <p class="eyebrow" data-zh="开源 · 跨平台 · 即刻启动" data-en="Open source · Cross-platform · Ready to launch">开源 · 跨平台 · 即刻启动</p>
+      <h1><span class="title-name">DSH-X</span><span class="title-rest" data-zh="让启动更简单。" data-en="Start with ease.">让启动更简单。</span></h1>
+      <p class="lead" data-zh="保存常用启动项，同时运行多个环境。版本、插件与整合包，一处管理；打开就是官方原版 DSH Web。" data-en="Save your launch entries and run multiple environments together. Manage versions, plugins and modpacks in one place, then open the original DSH Web UI.">保存常用启动项，同时运行多个环境。版本、插件与整合包，一处管理；打开就是官方原版 DSH Web。</p>
+      <!-- 下载按钮：href 直接写死当前版本的真实资产，API 被限流或 JS 没跑也能下对包。
+           发版时把下面五条 URL 和版本号一起更新（脚本拿到 release 列表后会按版本覆盖）。 -->
+      <div class="cta">
+        <a class="btn btn-go" id="download" href="https://github.com/yyh-001/DSH-X/releases/download/v0.1.22/DSH-Setup-0.1.22.exe">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4.2 10.5 3v8.15H2V4.2Zm9.5-1.34L22 1.35v9.8H11.5V2.86ZM2 12.15h8.5V20.3L2 19.1v-6.95Zm9.5 0H22v9.8l-10.5-1.51v-8.29Z"/></svg>
+          <span data-zh="下载 Windows 版" data-en="Download for Windows">下载 Windows 版</span>
+        </a>
+        <!-- 整块按钮就是下拉：点哪里都展开，菜单项自己带下载地址 -->
+        <span class="split" id="macSplit">
+          <button class="btn btn-alt split-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span class="apple-mark" aria-hidden="true"></span>
+            <span data-zh="下载 macOS 版" data-en="Download for macOS">下载 macOS 版</span>
+            <span class="split-caret" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9.5 12 15.5 18 9.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </button>
+          <div class="split-menu" role="listbox">
+            <a role="option" href="https://github.com/yyh-001/DSH-X/releases/download/v0.1.22/DSH-X-0.1.22-arm64.dmg"><span>Apple Silicon</span><span class="menu-hint">arm64</span></a>
+            <a role="option" href="https://github.com/yyh-001/DSH-X/releases/download/v0.1.22/DSH-X-0.1.22-x64.dmg"><span>Intel</span><span class="menu-hint">x64</span></a>
+          </div>
+        </span>
+        <span class="split" id="linuxSplit">
+          <button class="btn btn-alt split-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3M12.5 15H17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span data-zh="下载 Linux 版" data-en="Download for Linux">下载 Linux 版</span>
+            <span class="split-caret" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9.5 12 15.5 18 9.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </button>
+          <div class="split-menu" role="listbox">
+            <a role="option" href="https://github.com/yyh-001/DSH-X/releases/download/v0.1.22/DSH-X-0.1.22-x86_64.AppImage"><span>AppImage</span><span class="menu-hint">chmod +x</span></a>
+            <a role="option" href="https://github.com/yyh-001/DSH-X/releases/download/v0.1.22/DSH-X-0.1.22-amd64.deb"><span>.deb</span><span class="menu-hint">Debian / Ubuntu</span></a>
+          </div>
+        </span>
+      </div>
+      <div class="download-meta">
+        <span class="dl" id="dlCount" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5A1 1 0 1 1 7.7 10.3l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 15a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+          <span id="dlText"></span>
+        </span>
+        <a class="ver-link" id="ver" href="https://github.com/yyh-001/DSH-X/releases/latest" target="_blank" rel="noopener" title="发布说明">v0.1.22</a>
+      </div>
+      <p class="cta-note" data-zh="Windows 下载安装包；macOS 下载 dmg（Apple Silicon / Intel 可选，首次打开如提示未验证请右键打开）；Linux 下载 AppImage（chmod +x 后运行）或 deb。" data-en="Windows: download the installer. macOS: pick the Apple Silicon or Intel dmg (right-click Open if macOS cannot verify it). Linux: download the AppImage (chmod +x, then run) or the deb.">Windows 下载安装包；macOS 下载 dmg（Apple Silicon / Intel 可选，首次打开如提示未验证请右键打开）；Linux 下载 AppImage（chmod +x 后运行）或 deb。</p>
+      <nav class="links" aria-label="社区链接">
+        <span class="links-label" data-zh="了解更多 / 加入社区" data-en="Learn more / Community">了解更多 / 加入社区</span>
+        <a class="social-link social-icon" href="https://github.com/yyh-001/DSH-X" aria-label="GitHub" title="GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.57-.3-5.28-1.29-5.28-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.06 0 0 .96-.31 3.16 1.18a10.9 10.9 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.62 1.59.23 2.77.11 3.06.74.81 1.18 1.84 1.18 3.1 0 4.42-2.71 5.39-5.29 5.68.42.36.78 1.07.78 2.15v3.27c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
+        </a>
+        <a class="social-link social-icon" href="https://qm.qq.com/q/7AD2g70HqS" aria-label="QQ 群" title="QQ 群 993579665">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.914 14.529a32 32 0 0 0-.676-1.886l-.91-2.246c.002-.026.013-.468.013-.696C18.34 5.86 16.508 2 12 2S5.66 5.86 5.66 9.7c0 .229.011.671.012.697l-.91 2.246a32 32 0 0 0-.675 1.886c-.86 2.737-.581 3.87-.369 3.895c.455.054 1.771-2.06 1.771-2.06c0 1.224.637 2.822 2.016 3.976c-.515.157-1.147.399-1.554.695c-.365.267-.319.54-.253.65c.289.481 4.955.307 6.303.157c1.347.15 6.014.324 6.302-.158c.066-.11.112-.382-.253-.649c-.407-.296-1.039-.538-1.555-.695c1.379-1.154 2.016-2.752 2.016-3.977c0 0 1.316 2.115 1.771 2.06c.212-.025.49-1.157-.37-3.894"/></svg>
+        </a>
+        <a class="social-link social-icon" href="https://space.bilibili.com/32214737" aria-label="哔哩哔哩" title="哔哩哔哩">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"/></svg>
+        </a>
+      </nav>
+      <p class="note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <span data-zh="社区开源项目，并非 DeepSeek 官方产品，与 DeepSeek 无隶属或背书关系。" data-en="A community open-source project, not an official DeepSeek product and not affiliated with or endorsed by DeepSeek.">社区开源项目，并非 DeepSeek 官方产品，与 DeepSeek 无隶属或背书关系。</span>
+      </p>
+    </div>
+    <div class="visual">
+      <figure class="shot">
+        <img id="productShot" src="./screenshots/landing-shot-home.jpg" alt="DSH-X 启动项主页" width="1440" height="960" />
+      </figure>
+      <p class="preview-caption" data-zh="当前启动器界面 · 1440 × 960 实拍" data-en="Current launcher interface · Captured at 1440 × 960">当前启动器界面 · 1440 × 960 实拍</p>
+    </div>
+  </main>
+  <section class="wrap features" aria-label="DSH-X 功能">
+    <article class="feature"><span class="feature-number">01 / LAUNCH ENTRIES</span><h2 data-zh="启动项与多实例" data-en="Launch entries & instances">启动项与多实例</h2><p data-zh="为启动项选择目录、环境、版本与端口。同一版本的不同环境也能同时运行。" data-en="Choose a home directory, profile, version and port per entry. Run different profiles of the same version together.">为启动项选择目录、环境、版本与端口。同一版本的不同环境也能同时运行。</p></article>
+    <article class="feature"><span class="feature-number">02 / PLUGINS · MODPACKS</span><h2 data-zh="插件按环境管理" data-en="Plugins by environment">插件按环境管理</h2><p data-zh="单独开关与更新插件，从市场导入整合包。默认装进当前环境，确认前可查看变更、切换目标。" data-en="Toggle and update plugins, or import a modpack from the market. Review changes and choose the target profile before installing.">单独开关与更新插件，从市场导入整合包。默认装进当前环境，确认前可查看变更、切换目标。</p></article>
+    <article class="feature"><span class="feature-number">03 / MCP · SKILLS</span><h2 data-zh="MCP 与技能" data-en="MCP & skills">MCP 与技能</h2><p data-zh="配置 MCP 服务器，导入、管理与开关技能，让常用能力随时可用。" data-en="Configure MCP servers and import, manage and toggle skills to keep your tools close at hand.">配置 MCP 服务器，导入、管理与开关技能，让常用能力随时可用。</p></article>
+    <article class="feature"><span class="feature-number">04 / ORIGINAL WEB</span><h2 data-zh="熟悉的 DSH，随你打开" data-en="DSH, opened your way">熟悉的 DSH，随你打开</h2><p data-zh="选择浏览器标签页、浏览器独立窗口或桌面窗口。原版 DSH Web 不变，启动器提供深浅主题与大肥鱼。" data-en="Choose a browser tab, standalone browser window or desktop window. Enjoy the original DSH Web UI, with light and dark launcher themes and the Big Fish.">选择浏览器标签页、浏览器独立窗口或桌面窗口。原版 DSH Web 不变，启动器提供深浅主题与大肥鱼。</p></article>
+  </section>
+  <section class="wrap previews" aria-label="界面预览">
+    <figure><img data-shot="profiles" src="./screenshots/landing-shot-profiles.jpg" alt="DSH-X 环境列表" width="1440" height="960" loading="lazy" /><figcaption data-zh="环境列表 · 插件各自管理" data-en="Environments · Manage plugins separately">环境列表 · 插件各自管理</figcaption></figure>
+    <figure><img data-shot="market" src="./screenshots/landing-shot-market.jpg" alt="DSH-X 整合包市场" width="1440" height="960" loading="lazy" /><figcaption data-zh="整合包市场 · 浏览与导入" data-en="Modpack market · Browse and import">整合包市场 · 浏览与导入</figcaption></figure>
+  </section>
+  <!-- 「有官方桌面端为啥还要启动器」被问得最多，正面回答一次，省得每个新人都自己猜 -->
+  <section class="wrap faq" aria-labelledby="faq-heading">
+    <h2 class="faq-heading" id="faq-heading"><span class="faq-kicker">FAQ</span><span data-zh="常见问题" data-en="Frequently asked questions">常见问题</span></h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary data-zh="有了官方桌面端，为什么还要启动器？" data-en="The official desktop app exists — why a launcher?">有了官方桌面端，为什么还要启动器？</summary>
+        <p data-zh="官方桌面端是一份打包好的 DSH，稳定、开箱即用。DSH-X 管的是另一层：装哪个版本、同时跑几个环境、插件与整合包怎么管、启动坏了怎么退。界面不另做。" data-en="The official app is one packaged DSH — stable and ready to use. DSH-X handles a different layer: which version to install, how many environments run at once, how plugins and modpacks are managed, and how to roll back when a launch breaks. It does not rebuild the UI.">官方桌面端是一份打包好的 DSH，稳定、开箱即用。DSH-X 管的是另一层：装哪个版本、同时跑几个环境、插件与整合包怎么管、启动坏了怎么退。界面不另做。</p>
+      </details>
+      <details class="faq-item">
+        <summary data-zh="两个都装会冲突吗？" data-en="Can I install both?">两个都装会冲突吗？</summary>
+        <p data-zh="不会，可以同时装、各开各的窗口。DSH-X 只是把你本机安装的 DSH 版本启动起来，不替换官方桌面端。" data-en="Yes. They can be installed side by side, each in its own window. DSH-X only starts the DSH versions already installed on your machine; it does not replace the official app.">不会，可以同时装、各开各的窗口。DSH-X 只是把你本机安装的 DSH 版本启动起来，不替换官方桌面端。</p>
+      </details>
+      <details class="faq-item">
+        <summary data-zh="什么时候其实不需要 DSH-X？" data-en="When don't I need DSH-X?">什么时候其实不需要 DSH-X？</summary>
+        <p data-zh="只用最新版、只开一个环境、不折腾插件的话，官方桌面端就够了。需要多版本并存、多环境并行、整合包市场、启动失败回滚或手机访问时，再用启动器。" data-en="If you only use the latest version, keep one environment and don't tinker with plugins, the official desktop app is enough. Reach for the launcher when you need side-by-side versions, parallel environments, the modpack market, rollback after a failed launch, or phone access.">只用最新版、只开一个环境、不折腾插件的话，官方桌面端就够了。需要多版本并存、多环境并行、整合包市场、启动失败回滚或手机访问时，再用启动器。</p>
+      </details>
+      <details class="faq-item">
+        <summary data-zh="打开的界面是官方原版吗？" data-en="Is the UI the original DSH Web?">打开的界面是官方原版吗？</summary>
+        <p data-zh="是。DSH-X 不重做 DSH 的 Web 页面，启动后看到的就是官方原版界面；它负责的是启动之前和之外的事。DSH-X 是社区开源项目，不是 DeepSeek 官方产品。" data-en="Yes. DSH-X doesn't rebuild DSH's pages — you land on the original Web UI. It takes care of everything before and around the launch. DSH-X is a community open-source project, not an official DeepSeek product.">是。DSH-X 不重做 DSH 的 Web 页面，启动后看到的就是官方原版界面；它负责的是启动之前和之外的事。DSH-X 是社区开源项目，不是 DeepSeek 官方产品。</p>
+      </details>
+    </div>
+  </section>
+  <footer class="wrap site-footer"><span>© DSH-X · Community open source project</span><a href="https://github.com/yyh-001/DSH-X/releases/latest" data-zh="查看全部版本与下载" data-en="All releases and downloads">查看全部版本与下载</a></footer>
+  <script defer src="./water.js"></script>
+  <script>
+    // ---- 中英切换：文案写在 data-zh / data-en 上，带数字的句子靠变量重渲染 ----
+    const LANG_KEY = 'dsh-x-lang'
+    const THEME_KEY = 'dsh-x-theme'
+    let lang = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh'
+    let starCount = null
+    let downloadCount = null
+
+    const STRINGS = {
+      title: {
+        zh: 'DSH-X — DeepSeek Harness 启动器',
+        en: 'DSH-X — a DeepSeek Harness launcher',
+      },
+      downloads: { zh: '已有 <b>{n}</b> 次下载', en: '<b>{n}</b> downloads' },
+      starsLabel: { zh: 'GitHub 仓库，{n} stars', en: 'GitHub repository, {n} stars' },
+    }
+
+    function t(key, vars = {}) {
+      let text = STRINGS[key][lang]
+      for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value)
+      return text
+    }
+
+    function renderStars() {
+      if (starCount === null) return
+      document.getElementById('star-count').textContent = fmtStars(starCount)
+      document.getElementById('gh').setAttribute('aria-label', t('starsLabel', { n: starCount.toLocaleString() }))
+      document.getElementById('stars').title = starCount.toLocaleString() + ' GitHub stars'
+    }
+
+    function renderDownloads() {
+      const chip = document.getElementById('dlCount')
+      if (downloadCount === null || !chip) return
+      document.getElementById('dlText').innerHTML = t('downloads', { n: downloadCount.toLocaleString() })
+      chip.hidden = false
+    }
+
+    function applyLang(next) {
+      lang = next === 'en' ? 'en' : 'zh'
+      localStorage.setItem(LANG_KEY, lang)
+      for (const el of document.querySelectorAll('[data-zh]')) {
+        el.textContent = (lang === 'en' ? el.dataset.en : el.dataset.zh) || el.dataset.zh
+      }
+      document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN'
+      document.title = t('title')
+      document.getElementById('lang-label').textContent = lang === 'en' ? '中文' : 'EN'
+      updateThemeLabel()
+      renderStars()
+      renderDownloads()
+    }
+
+    document.getElementById('lang').onclick = () => applyLang(lang === 'en' ? 'zh' : 'en')
+
+    function updateThemeLabel() {
+      const dark = document.documentElement.dataset.colorScheme === 'dark'
+      const label = dark
+        ? (lang === 'en' ? 'Switch to light mode' : '切换到浅色模式')
+        : (lang === 'en' ? 'Switch to dark mode' : '切换到深色模式')
+      const button = document.getElementById('theme')
+      button.setAttribute('aria-label', label)
+      button.title = label
+      const suffix = lang === 'en' ? '-en' : ''
+      const shot = document.getElementById('productShot')
+      shot.src = `./screenshots/landing-shot-${dark ? 'dark-mode' : 'home'}${suffix}.jpg`
+      shot.alt = lang === 'en' ? 'DSH-X launch entries' : 'DSH-X 启动项主页'
+      for (const image of document.querySelectorAll('[data-shot]')) {
+        image.src = `./screenshots/landing-shot-${image.dataset.shot}${suffix}.jpg`
+        image.alt = image.dataset.shot === 'profiles'
+          ? (lang === 'en' ? 'DSH-X environments' : 'DSH-X 环境列表')
+          : (lang === 'en' ? 'DSH-X modpack market' : 'DSH-X 整合包市场')
+      }
+    }
+
+    document.getElementById('theme').onclick = () => {
+      const next = document.documentElement.dataset.colorScheme === 'dark' ? 'light' : 'dark'
+      document.documentElement.dataset.colorScheme = next
+      localStorage.setItem(THEME_KEY, next)
+      updateThemeLabel()
+    }
+
+    function fmtStars(n) {
+      if (n >= 1000) {
+        const k = n / 1000
+        return (k >= 10 ? k.toFixed(1) : k.toFixed(1)).replace(/\.0$/, "") + "K"
+      }
+      return String(n)
+    }
+    fetch("https://api.github.com/repos/yyh-001/DSH-X")
+      .then((r) => r.ok ? r.json() : null)
+      .then((repo) => {
+        if (!repo) return
+        starCount = repo.stargazers_count
+        renderStars()
+      })
+      .catch(() => {})
+    // 一次拿整份 release 列表，三件事一起做：下载次数、版本下拉、给当前平台挑资产。
+    // 原来这里请求两次（?per_page=100 数下载量 + /latest 取资产），合成一次省一个 round trip。
+    const INSTALLER = /^DSH-Setup(?:-.*)?\.exe$|^DSH-X-.*\.(?:dmg|AppImage|deb)$/
+    const RELEASES_PAGE = "https://github.com/yyh-001/DSH-X/releases/latest"
+
+    // 系统默认值：优先 UA-CH 的 platform，其次 navigator.platform；认不出来就当 Windows
+    const guessOS = (() => {
+      const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || ""
+      if (/win/i.test(p)) return "win"
+      if (/mac/i.test(p)) return "mac"
+      if (/linux|x11/i.test(p)) return "linux"
+      return "win"
+    })()
+
+    // 按浏览器预选：系统匹配的那个按钮用实心，其余描边。
+    // mac / Linux 现在整块是下拉按钮，实心要打在 .split-trigger 上，不是 <a>。
+    if (guessOS) {
+      const current = guessOS === "win"
+        ? document.getElementById("download")
+        : document.querySelector(`#${guessOS === "mac" ? "macSplit" : "linuxSplit"} .split-trigger`)
+      if (current) {
+        for (const el of document.querySelectorAll(".cta .btn")) el.classList.replace("btn-go", "btn-alt")
+        current.classList.replace("btn-alt", "btn-go")
+      }
+    }
+
+    const assetOf = {
+      // Windows 优先版本化的正常安装包；DSH-Setup.exe 是给 0.1.18 旧更新器的兼容桥
+      win: (as) => as.find((a) => /^DSH-Setup-\d.*\.exe$/.test(a.name)) || as.find((a) => a.name === "DSH-Setup.exe"),
+      macArm: (as) => as.find((a) => /^DSH-X-.*-arm64\.dmg$/.test(a.name)),
+      macX64: (as) => as.find((a) => /^DSH-X-.*-x64\.dmg$/.test(a.name)),
+      appImage: (as) => as.find((a) => /\.AppImage$/.test(a.name)),
+      deb: (as) => as.find((a) => /\.deb$/.test(a.name)),
+    }
+
+    let currentRelease = null
+
+    function closeMenus(except) {
+      for (const root of document.querySelectorAll(".split")) {
+        if (root === except) continue
+        root.dataset.open = "false"
+        root.querySelector(".split-trigger").setAttribute("aria-expanded", "false")
+      }
+    }
+
+    /** 整块按钮就是下拉：点哪里都展开，点菜单项直接下载并收起。 */
+    function setupSplit(rootId) {
+      const root = document.getElementById(rootId)
+      if (!root) return
+      const trigger = root.querySelector(".split-trigger")
+      const menu = root.querySelector(".split-menu")
+      if (!trigger || !menu) return
+      trigger.addEventListener("click", () => {
+        const open = root.dataset.open !== "true"
+        closeMenus(root)
+        root.dataset.open = String(open)
+        trigger.setAttribute("aria-expanded", String(open))
+      })
+      for (const link of menu.querySelectorAll("a")) {
+        link.addEventListener("click", () => {
+          root.dataset.open = "false"
+          trigger.setAttribute("aria-expanded", "false")
+        })
+      }
+    }
+
+    /**
+     * 按钮和菜单项的 href：拿到 release 列表就换成那一版的资产，拿不到就**保留 HTML 里写死的那份**。
+     * 后者很关键——GitHub API 未认证 60 次/小时/IP，用完时链接仍然要能直接下到包，
+     * 不能退回成一个只会跳转发布页的地址。
+     */
+    function paintLinks() {
+      if (!currentRelease) return
+      const as = currentRelease.assets || []
+      const fallback = currentRelease.html_url || RELEASES_PAGE
+      const set = (el, kind) => {
+        if (!el) return
+        const asset = assetOf[kind](as)
+        el.href = (asset && asset.browser_download_url) || fallback
+      }
+      set(document.getElementById("download"), "win")
+      const mac = document.querySelectorAll("#macSplit .split-menu a")
+      set(mac[0], "macArm")
+      set(mac[1], "macX64")
+      const linux = document.querySelectorAll("#linuxSplit .split-menu a")
+      set(linux[0], "appImage")
+      set(linux[1], "deb")
+      const ver = document.getElementById("ver")
+      if (ver) {
+        ver.href = fallback
+        if (currentRelease.tag_name) ver.textContent = currentRelease.tag_name
+      }
+    }
+
+    setupSplit("macSplit")
+    setupSplit("linuxSplit")
+
+    // 点空白处或按 Esc 收起浮层
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".split")) closeMenus(null)
+    })
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeMenus(null)
+    })
+
+    fetch("https://api.github.com/repos/yyh-001/DSH-X/releases?per_page=30")
+      .then((r) => r.ok ? r.json() : null)
+      .then((list) => {
+        if (!Array.isArray(list) || !list.length) return
+        const total = list.reduce((sum, rel) => sum + (rel.assets || [])
+          .filter((a) => INSTALLER.test(a.name))
+          .reduce((n, a) => n + (a.download_count || 0), 0), 0)
+        if (total) {
+          downloadCount = total
+          renderDownloads()
+        }
+        const usable = list.filter((rel) => !rel.draft)
+        if (!usable.length) return
+        // 最新正式版：列表按时间倒序，第一个非 prerelease 的就是它
+        currentRelease = usable.find((rel) => !rel.prerelease) || usable[0]
+        paintLinks()
+      })
+      .catch(() => {
+        // 拿不到列表（GitHub 未认证 60 次/小时/IP）就什么都不做：
+        // 按钮的 href 是写死在 HTML 里的，照样能下到正确的包。
+      })
+
+    paintLinks()
+    applyLang(lang)
+  </script>
+</body>
+</html>

@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DSH-X 宣传片</title>
+<style>
+  /* 时长 60 秒、1920x1080。renderPromo(T) 由录制脚本按 1/24 秒步进调用；
+     页面自己用 requestAnimationFrame 走同一套渲染，所以直接打开也能看。 */
+  :root {
+    --ink: #16233d;
+    --muted: #6b7d9c;
+    --accent: #3b6fe0;
+    --line: #d8e2f7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #fff; }
+  body { font-family: "MiSans", "Microsoft YaHei", "PingFang SC", sans-serif; color: var(--ink); }
+
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #fff; }
+
+  .beat { position: absolute; inset: 0; opacity: 0; will-change: opacity, transform; }
+  .beat.on { opacity: 1; }
+
+  /* 背景板 */
+  .bg-light {
+    background:
+      radial-gradient(1200px 820px at 18% 8%, #f4fcff 0%, rgba(244,252,255,0) 62%),
+      linear-gradient(180deg, #f1fbff 0%, #e3eefb 58%, #d2e3f5 100%);
+  }
+  .bg-white { background: #fdfdfe; }
+  .bg-vivid { background: conic-gradient(from 210deg at 62% 42%, #1b1b6a, #4b2fbf, #d84ba8, #ff8a5c, #2fd6a8, #1b3fd8, #1b1b6a); }
+  .bg-vivid::after { content: ""; position: absolute; inset: 0; background: radial-gradient(900px 700px at 50% 50%, rgba(0,0,0,.18), rgba(0,0,0,.55)); }
+  .bg-stripe {
+    background: repeating-linear-gradient(118deg, #3a2350 0 46px, #432a5d 46px 92px);
+  }
+  .bg-dark { background: #08080d; }
+
+  /* 角色水印：整片统一，缓慢上下浮动 */
+  .mascot {
+    position: absolute; left: -230px; bottom: -120px; width: 900px; height: 900px;
+    background: url("./background-character.png") center / contain no-repeat;
+    opacity: .42;
+  }
+
+  /* 左下角署名，和参考片一样常驻 */
+  .credit-tag {
+    position: absolute; left: 64px; bottom: 48px; display: flex; align-items: center; gap: 8px;
+    font-size: 20px; font-weight: 600; letter-spacing: .16em; color: rgba(22,35,61,.5);
+  }
+  .beat.dark .credit-tag { color: rgba(255,255,255,.5); }
+
+  /* 排版：中文大号极粗居中 + 灰色小字副题 */
+  .head { position: absolute; left: 0; right: 0; top: 108px; text-align: center; }
+  .head h1 { font-size: 72px; font-weight: 800; letter-spacing: .01em; }
+  .head p { margin-top: 18px; font-size: 30px; color: var(--muted); font-weight: 400; }
+
+  .shot {
+    position: absolute; left: 50%; top: 372px; width: 1340px; margin-left: -670px;
+    border-radius: 20px; overflow: hidden; background: #fff;
+    border: 1px solid var(--line);
+    box-shadow: 0 40px 90px rgba(22,35,61,.22), 0 4px 14px rgba(22,35,61,.08);
+  }
+  .shot img { display: block; width: 100%; }
+
+  /* 开场 */
+  .hero { position: absolute; left: 0; right: 0; top: 300px; text-align: center; }
+  .hero .icon { width: 260px; height: 260px; border-radius: 58px; box-shadow: 0 30px 70px rgba(22,35,61,.22); }
+  .hero h1 { margin-top: 54px; font-size: 128px; font-weight: 800; color: var(--accent); letter-spacing: .02em; }
+  .hero p { margin-top: 26px; font-size: 38px; color: var(--muted); }
+
+  /* 渐变拍 / 斜纹拍 */
+  .center-block { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; color: #fff; }
+  .center-block h1 { font-size: 88px; font-weight: 800; letter-spacing: .01em; text-shadow: 0 6px 30px rgba(0,0,0,.28); }
+  .center-block p { margin-top: 26px; font-size: 34px; opacity: .88; }
+  .wordmark { text-align: center; color: #fff; }
+  .wordmark .above, .wordmark .below { font-size: 40px; opacity: .9; }
+  .wordmark .name { margin: 18px 0; font-size: 132px; font-weight: 800; letter-spacing: .06em; font-family: "Segoe UI", sans-serif; }
+
+  /* 下载拍 */
+  .cta { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; }
+  .cta h1 { font-size: 84px; font-weight: 800; }
+  .cta .url { margin-top: 30px; font-size: 34px; color: var(--accent); font-weight: 600; }
+  .cta .arrow { margin-bottom: 34px; font-size: 96px; color: var(--accent); line-height: 1; }
+
+  /* 说明拍 */
+  .legal { position: absolute; left: 50%; top: 50%; width: 1160px; margin-left: -580px; transform: translateY(-50%); text-align: center; }
+  .legal .mark { width: 120px; height: 120px; border-radius: 28px; opacity: .9; }
+  .legal p { margin-top: 14px; font-size: 26px; color: var(--muted); line-height: 1.7; }
+  .legal .t { margin-top: 34px; font-size: 30px; color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <section class="beat bg-light" data-beat="intro">
+    <div class="mascot" data-mascot></div>
+    <div class="hero">
+      <img class="icon" src="./icon-app.png" data-icon />
+      <h1 data-rise>DSH-X</h1>
+      <p data-rise>选一个版本，启动 dsh web</p>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-white" data-beat="shot" data-img="screenshot-home.png">
+    <div class="head"><h1 data-rise>选版本即用</h1><p data-rise>启动 · 停止 · 重启 · 更新 · 卸载</p></div>
+    <div class="shot" data-card><img src="./screenshots/screenshot-home.png" /></div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-white" data-beat="shot" data-img="screenshot-plugins.png">
+    <div class="head"><h1 data-rise>插件一键开关</h1><p data-rise>列出已装插件，开关即时生效</p></div>
+    <div class="shot" data-card><img src="./screenshots/screenshot-plugins.png" /></div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-white" data-beat="shot" data-img="screenshot-settings.png">
+    <div class="head"><h1 data-rise>启动失败也不慌</h1><p data-rise>兼容模式自动禁用出问题的插件并重试</p></div>
+    <div class="shot" data-card><img src="./screenshots/screenshot-settings.png" /></div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-vivid dark" data-beat="vivid">
+    <div class="center-block">
+      <h1 data-rise>托盘常驻</h1>
+      <p data-rise>关掉界面不退出，双击标题栏最大化</p>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-stripe dark" data-beat="wordmark">
+    <div class="center-block">
+      <div class="wordmark">
+        <div class="above" data-rise>轻量的外表下</div>
+        <div class="name" data-rise>DSH-X</div>
+        <div class="below" data-rise>自带 Node 与 npm，换版本不用重装插件</div>
+      </div>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-light" data-beat="cta">
+    <div class="mascot" data-mascot></div>
+    <div class="cta">
+      <div class="arrow" data-rise>↓</div>
+      <h1 data-rise>下载 Windows 版</h1>
+      <div class="url" data-rise>github.com/yyh-001/DSH-X/releases</div>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-white" data-beat="legal">
+    <div class="legal">
+      <img class="mark" src="./icon-app.png" data-icon />
+      <div class="t" data-rise>社区开源项目，免费且以 MIT 许可发布</div>
+      <p data-rise>并非 DeepSeek 官方产品，与 DeepSeek 无隶属或背书关系。</p>
+      <p data-rise>片中界面为实际运行截图，效果以你机器上的实际版本为准。</p>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+  <section class="beat bg-dark dark" data-beat="outro">
+    <div class="center-block">
+      <div class="wordmark">
+        <div class="name" data-rise>DSH-X</div>
+        <div class="below" data-rise>免费开源 · MIT</div>
+      </div>
+    </div>
+    <div class="credit-tag">GITHUB.COM/YYH-001/DSH-X</div>
+  </section>
+
+</div>
+
+<script>
+// ---- 时间线：每拍 (开始, 时长)。60 秒，节奏对齐参考片 ----
+const BEATS = [
+  { key: 'intro',    at: 0,   len: 6.0 },
+  { key: 'shot',     at: 6,   len: 8.0, img: 'screenshot-home.png' },
+  { key: 'shot',     at: 14,  len: 7.5, img: 'screenshot-plugins.png' },
+  { key: 'shot',     at: 21.5, len: 7.5, img: 'screenshot-settings.png' },
+  { key: 'vivid',    at: 29,  len: 6.5 },
+  { key: 'wordmark', at: 35.5, len: 7.0 },
+  { key: 'cta',      at: 42.5, len: 7.0 },
+  { key: 'legal',    at: 49.5, len: 5.5 },
+  { key: 'outro',    at: 55,  len: 5.0 },
+]
+const TOTAL = 60
+const FPS = 24
+
+// 出场用带回弹的过冲曲线，落点会先冲过头再回来，就是那种「Q弹」
+function spring(p) {
+  p = Math.max(0, Math.min(1, p))
+  if (p === 0) return 0
+  if (p === 1) return 1
+  return 1 - Math.exp(-6.2 * p) * Math.cos(7.4 * p)
+}
+function fade(p, a, b) { return Math.max(0, Math.min(1, (p - a) / (b - a))) }
+
+const layers = [...document.querySelectorAll('.beat')].map((el) => ({
+  el,
+  beat: BEATS.find((b) => b.key === el.dataset.beat && (!b.img || b.img === el.dataset.img)),
+  rises: [...el.querySelectorAll('[data-rise]')],
+  card: el.querySelector('[data-card]'),
+  mascot: el.querySelector('[data-mascot]'),
+}))
+
+function renderPromo(T) {
+  for (const layer of layers) {
+    const { beat, el } = layer
+    const local = T - beat.at
+    const visible = local > -0.7 && local < beat.len + 0.7
+    el.style.opacity = visible ? 1 : 0
+    if (!visible) continue
+
+    // 整拍淡入淡出，交接处叠化
+    el.style.opacity = Math.min(fade(local, -0.7, 0.05), 1 - fade(local, beat.len - 0.05, beat.len + 0.7))
+
+    const p = Math.max(0, Math.min(1, local / 1.1))
+    layer.rises.forEach((node, i) => {
+      const s = spring(Math.max(0, p - i * 0.12))
+      node.style.opacity = s
+      node.style.transform = `translateY(${(1 - s) * 46}px) scale(${0.94 + 0.06 * s})`
+    })
+
+    if (layer.card) {
+      const s = spring(Math.max(0, (local - 0.25) / 1.35))
+      const push = 1 + 0.035 * Math.max(0, Math.min(1, local / beat.len))
+      layer.card.style.opacity = s
+      layer.card.style.transform = `translateY(${(1 - s) * 90}px) scale(${(0.93 + 0.07 * s) * push})`
+    }
+
+    if (layer.mascot) {
+      const drift = Math.sin(local * 0.55) * 16
+      layer.mascot.style.transform = `translateY(${drift}px) rotate(${Math.sin(local * 0.4) * 0.8}deg)`
+    }
+  }
+}
+
+// 直接打开这个页面时自己播一遍
+window.renderPromo = renderPromo
+const startedAt = performance.now()
+function tick(now) {
+  const t = (now - startedAt) / 1000
+  renderPromo(t % (TOTAL + 1))
+  requestAnimationFrame(tick)
+}
+if (!new URLSearchParams(location.search).has('still')) requestAnimationFrame(tick)
+renderPromo(0)
+</script>
+</body>
+</html>
