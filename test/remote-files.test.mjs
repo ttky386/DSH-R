@@ -11,6 +11,7 @@ const agentFile = join(root, 'src', 'remote-agent.mjs')
 const server = readFileSync(join(root, 'src', 'server.js'), 'utf8')
 const html = readFileSync(join(root, 'src', 'public', 'index.html'), 'utf8')
 const launch = readFileSync(join(root, 'src', 'remote-launch.js'), 'utf8')
+const linuxAgentOnly = process.platform === 'win32' ? '远端 agent 运行于 Linux；Windows runner 仅构建控制端' : false
 
 function runAgent(home, operation, payload) {
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64')
@@ -46,7 +47,7 @@ function profileWithFilePlugins(dir, { all = true } = {}) {
   }
 }
 
-test('远端文件列表和预览读取限制在 DSH_HOME 内', () => {
+test('远端文件列表和预览读取限制在 DSH_HOME 内', { skip: linuxAgentOnly }, () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'dsh-remote-files-'))
   const home = join(rootDir, 'home')
   const dshHome = join(rootDir, 'dsh')
@@ -89,7 +90,7 @@ test('远端文件列表和预览读取限制在 DSH_HOME 内', () => {
   }
 })
 
-test('远端 symlink 不能把文件面板指向 DSH_HOME 外', () => {
+test('远端 symlink 不能把文件面板指向 DSH_HOME 外', { skip: linuxAgentOnly }, () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'dsh-remote-files-link-'))
   const home = join(rootDir, 'home')
   const dshHome = join(rootDir, 'dsh')
@@ -106,7 +107,7 @@ test('远端 symlink 不能把文件面板指向 DSH_HOME 外', () => {
   }
 })
 
-test('远端文件能力探测官方上传、文件树、预览和路径引用插件', () => {
+test('远端文件能力探测官方上传、文件树、预览和路径引用插件', { skip: linuxAgentOnly }, () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'dsh-remote-file-capabilities-'))
   const home = join(rootDir, 'home')
   mkdirSync(home, { recursive: true })

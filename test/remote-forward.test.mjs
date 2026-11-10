@@ -7,6 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const forwardFile = fileURLToPath(new URL('../src/remote-forward.mjs', import.meta.url))
+const linuxForwardOnly = process.platform === 'win32' ? 'reverse-forward 运行于远端 Linux；Windows runner 的 TCP teardown 行为不代表目标环境' : false
 
 async function listen(server) {
   server.listen(0, '127.0.0.1')
@@ -124,7 +125,7 @@ test('远端 reverse-forward 透传 WebSocket 并改写 Origin/Host', async () =
   }
 })
 
-test('远端 reverse-forward 流式转发上传请求体，不在代理层攒完整文件', async () => {
+test('远端 reverse-forward 流式转发上传请求体，不在代理层攒完整文件', { skip: linuxForwardOnly }, async () => {
   const chunks = []
   let sawFirst
   const sawFirstPromise = new Promise((resolve) => { sawFirst = resolve })
