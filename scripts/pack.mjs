@@ -2,7 +2,7 @@
 // 外壳自更新交给 electron-updater。
 //
 // 安装包里只有外壳（release/shell-stage → resources/app）：Electron main/tray/updater/preload/tabs
-// + electron-updater 依赖。二开安装包内置 dsh-x-remote-core 离线引导包，
+// + electron-updater 依赖。二开安装包内置 dsh-r-core 离线引导包，
 // 所以外壳可以很久不发版、核心照发。
 //
 // 核心层（release/core-stage）只在打 npm 核心包时才组装，见 --stage-only：
@@ -126,8 +126,8 @@ async function buildCoreStage() {
   await copyAppFiles(CORE_STAGE)
   await copyNodeRuntime(join(CORE_STAGE, 'node'))
   await writeFile(join(CORE_STAGE, 'package.json'), `${JSON.stringify({
-    // 核心包跨平台：同一个 dsh-x-remote-core 在 Windows / mac / Linux 上都能用，只有外壳按平台分开
-    name: 'dsh-x-remote-core',
+    // 核心包跨平台：同一个 dsh-r-core 在 Windows / mac / Linux 上都能用，只有外壳按平台分开
+    name: 'dsh-r-core',
     productName: 'DSH',
     version: PKG.version,
     private: true,
@@ -150,7 +150,7 @@ async function buildCoreBootstrap() {
   await cp(join(CORE_BOOTSTRAP, packed), join(CORE_BOOTSTRAP, 'core.tgz'))
   await rm(join(CORE_BOOTSTRAP, packed), { force: true })
   await writeFile(join(CORE_BOOTSTRAP, 'core.json'), `${JSON.stringify({
-    name: 'dsh-x-remote-core',
+    name: 'dsh-r-core',
     version: PKG.version,
     electron: ELECTRON_VERSION,
   }, null, 2)}\n`)

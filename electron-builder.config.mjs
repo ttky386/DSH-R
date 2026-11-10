@@ -5,7 +5,7 @@ import { join } from 'node:path'
  *
  * 安装包里只有外壳：
  * - resources/app（release/shell-stage）：外壳，版本 = shell/package.json
- * 二开核心 tarball 作为离线引导随包分发；后续核心更新只查 dsh-x-remote-core。
+ * DSH-R 核心 tarball 作为离线引导随包分发；后续核心更新只查 dsh-r-core。
  *
  * 两个通道各自更新自己那层：
  * - 外壳/Electron：electron-updater（NSIS/dmg），换整个安装包
@@ -31,14 +31,14 @@ export default {
   npmRebuild: false,
   files: ['**/*'],
   extraResources: [
-    // 二开核心随安装包离线引导；更新只查 dsh-x-remote-core，不会误取上游核心。
+    // DSH-R 核心随安装包离线引导；更新只查 dsh-r-core，不会误取上游核心。
     { from: 'release/core-bootstrap', to: 'core-bootstrap' },
   ],
   publish: [
     {
       provider: 'github',
-      owner: 'yyh-001',
-      repo: 'DSH-X',
+      owner: 'ttky386',
+      repo: 'DSH-R',
       releaseType: 'release',
     },
   ],

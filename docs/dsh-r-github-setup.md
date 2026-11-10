@@ -39,7 +39,7 @@ https://github.com/yyh-001/DSH-X.git
 
 ## 2. 检查 Git 身份
 
-在 WSL 的 `/home/kali/Ai/tools/dsh-x` 执行：
+在 DSH-R 仓库目录执行：
 
 ```sh
 git config user.name

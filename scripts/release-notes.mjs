@@ -73,7 +73,7 @@ if (unsorted.length) {
   out.push(...unsorted.map((text) => `- ${text}`), '')
 }
 
-out.push(`Full Changelog: [${from}...${tag}](https://github.com/yyh-001/DSH-X/compare/${from}...${tag})`, '')
+out.push(`Full Changelog: [${from}...${tag}](https://github.com/ttky386/DSH-R/compare/${from}...${tag})`, '')
 out.push('---', '', '<a id="en"></a>', '', '## English', '')
 for (const [, , en] of SECTIONS) {
   out.push(`### ${en}`, '', '- ', '')

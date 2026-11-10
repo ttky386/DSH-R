@@ -1,4 +1,4 @@
-// 把核心层打成 npm 核心包：dsh-x-remote-core@<版本>。
+// 把核心层打成 npm 核心包：dsh-r-core@<版本>。
 //
 //   node scripts/pack-core.mjs                    # 用 release/core-stage，当前核心版本
 //   node scripts/pack-core.mjs --version 0.1.21   # 本地演示用假版本
@@ -40,7 +40,7 @@ function run(command, args, cwd = ROOT, shell = process.platform === 'win32') {
 }
 
 export function corePackageName() {
-  return process.env.DSH_CORE_PACKAGE || 'dsh-x-remote-core'
+  return process.env.DSH_CORE_PACKAGE || 'dsh-r-core'
 }
 
 /** 生成核心 tarball；返回路径与完整性信息（演示和 CI 共用）。 */

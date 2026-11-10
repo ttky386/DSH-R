@@ -1,15 +1,15 @@
 {
   "name": "dsh-x",
-  "version": "0.1.26-rc.3",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DSH-X 的 Electron 外壳：窗口、托盘、内部标签页、自更新。",
+  "description": "DSH-R 使用的 Electron 外壳：窗口、托盘、内部标签页与远程 DSH 页面。",
   "main": "main.mjs",
-  "author": "yyh",
+  "author": "ttky",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yyh-001/DSH-X.git",
+    "url": "git+https://github.com/ttky386/DSH-R.git",
     "directory": "shell"
   }
 }

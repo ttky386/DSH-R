@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// dsh-x npm 版的入口：确保核心已下载，然后用 electron 依赖启动外壳（DSH_CORE_DIR 指向核心）。
+// dsh-r npm 版的入口：确保核心已下载，然后用 electron 依赖启动外壳（DSH_CORE_DIR 指向核心）。
 //
-//   dsh-x             启动管理器（首次会从 npm 拉核心）
-//   dsh-x --update    更新核心到 npm 上的最新版
-//   dsh-x --version   打印 CLI（外壳）和已安装核心的版本
-//   dsh-x --core      打印核心目录
+//   dsh-r             启动管理器（首次会从 npm 拉核心）
+//   dsh-r --update    更新核心到 npm 上的最新版
+//   dsh-r --version   打印 CLI（外壳）和已安装核心的版本
+//   dsh-r --core      打印核心目录
 //
 // 安装版（DSH-Setup.exe）和这个 npm 版共用同一份核心包，但 npm 版的更新走 npm，
 // 不走安装包自更新。
@@ -22,18 +22,18 @@ const pkg = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8'))
 const args = process.argv.slice(2)
 
 function help() {
-  console.log(`dsh-x ${pkg.version}
+  console.log(`dsh-r ${pkg.version}
 
 用法：
-  dsh-x              启动管理器
-  dsh-x --update     更新核心到 npm 最新版
-  dsh-x --version    打印版本
-  dsh-x --core       打印核心目录
+  dsh-r              启动管理器
+  dsh-r --update     更新核心到 npm 最新版
+  dsh-r --version    打印版本
+  dsh-r --core       打印核心目录
 
 环境变量：
   DSH_CORE_REGISTRY  覆盖 npm registry（默认 npmmirror，失败退回 npmjs）
   DSH_CORE_CHANNEL   latest / rc / alpha（默认 latest）
-  DSH_CORE_PACKAGE   覆盖核心包名（默认 dsh-x-remote-core）
+  DSH_CORE_PACKAGE   覆盖核心包名（默认 dsh-r-core）
   DSH_NPM_CACHE      覆盖缓存目录
   DSH_ELECTRON_BIN   覆盖 Electron 可执行文件（测试用）
 `)
@@ -44,7 +44,7 @@ function electronBinary() {
   try {
     return require('electron')
   } catch {
-    throw new Error('没有找到 electron 依赖：请在安装 dsh-x 的目录里执行 npm install，或重新安装 dsh-x')
+    throw new Error('没有找到 electron 依赖：请在安装 dsh-r 的目录里执行 npm install，或重新安装 dsh-r')
   }
 }
 
@@ -53,7 +53,7 @@ async function launch() {
   const core = await ensureCore({ electronVersion })
   const electron = electronBinary()
   if (!electron || !existsSync(electron)) throw new Error(`Electron 可执行文件不存在：${electron}`)
-  console.log(`dsh-x ${pkg.version} · 核心 ${core.version}${core.downloaded ? '（刚下载）' : ''}`)
+  console.log(`dsh-r ${pkg.version} · 核心 ${core.version}${core.downloaded ? '（刚下载）' : ''}`)
   // Electron 跑的是这个 npm 包的根目录（外壳，package.json 的 main 指向 shell/main.mjs），
   // 核心目录通过 DSH_CORE_DIR 传给外壳；外壳启动时优先加载它。
   const appRoot = join(HERE, '..')
@@ -75,7 +75,7 @@ async function main() {
   if (args.includes('--help') || args.includes('-h')) return help()
   if (args.includes('--version') || args.includes('-v')) {
     const installed = installedCore()
-    console.log(`dsh-x ${pkg.version}${installed ? ` · 核心 ${installed.version}` : ' · 核心未安装'}`)
+    console.log(`dsh-r ${pkg.version}${installed ? ` · 核心 ${installed.version}` : ' · 核心未安装'}`)
     return
   }
   if (args.includes('--core')) {
@@ -93,6 +93,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`dsh-x: ${error?.message || error}`)
+    console.error(`dsh-r: ${error?.message || error}`)
   process.exitCode = 1
 })

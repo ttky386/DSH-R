@@ -44,4 +44,4 @@ It is not the official DSH-X line maintained by the original author, and it is n
 - The remote file panel is read-only browsing with bounded preview. It does not write, delete, rename or expose arbitrary paths, and sensitive credential files are rejected.
 - Drag-and-drop upload, the file tree, right-sidebar preview and path clicks depend on official DSH plugins.
 - reverse-forward handles HTTP / WebSocket only; it is not a general TCP proxy.
-- The project is named DSH-R, while package names, process names and installer display strings still use DSH-X / DSH. A full brand rename has not been done.
+- The project is named DSH-R, while some internal package names, process names and installer display strings still use DSH-X / DSH. A full brand rename has not been done.

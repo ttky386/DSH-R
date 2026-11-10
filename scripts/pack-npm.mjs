@@ -1,10 +1,10 @@
-// 把 npm-package/ + shell/ 打成 dsh-x 的 npm 包；--publish 时发到 npm。
+// 把 npm-package/ + shell/ 打成 dsh-r 的 npm 包；--publish 时发到 npm。
 //
 //   node scripts/pack-npm.mjs
 //   node scripts/pack-npm.mjs --publish
 //
 // CLI 包本身很小：外壳代码在这里，核心在运行时按平台从 npm 拉，Electron 是依赖。
-// 版本跟外壳走（shell/package.json），核心版本由 npm 上的 dsh-x-remote-core-* 决定。
+// 版本跟外壳走（shell/package.json），核心版本由 npm 上的 dsh-r-core-* 决定。
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'

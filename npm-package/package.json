@@ -1,10 +1,10 @@
 {
-  "name": "@yyh001/dsh-x",
-  "version": "0.1.22",
-  "description": "DSH-X 启动器的 npm 版：Electron 外壳 + 从 npm 拉取的平台核心。Desktop launcher for DeepSeek Harness via npm.",
+  "name": "dsh-r",
+  "version": "0.1.0",
+  "description": "DSH-R 的 npm 打包入口：Electron 外壳 + 平台核心。",
   "type": "module",
   "bin": {
-    "dsh-x": "bin/dsh-x.mjs"
+    "dsh-r": "bin/dsh-r.mjs"
   },
   "files": [
     "bin",
@@ -36,11 +36,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yyh-001/DSH-X.git",
+    "url": "git+https://github.com/ttky386/DSH-R.git",
     "directory": "npm-package"
   },
-  "homepage": "https://github.com/yyh-001/DSH-X#npm",
+  "homepage": "https://github.com/ttky386/DSH-R#npm",
   "bugs": {
-    "url": "https://github.com/yyh-001/DSH-X/issues"
+    "url": "https://github.com/ttky386/DSH-R/issues"
   }
 }

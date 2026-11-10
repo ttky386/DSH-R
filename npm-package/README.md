@@ -1,28 +1,28 @@
-# @yyh001/dsh-x（npm 版）
+# dsh-r（npm 版）
 
 用 npm 安装的 DSH-X 启动器：Electron 外壳 + 从 npm 拉取的平台核心。
 
 ```sh
-npm i -g @yyh001/dsh-x
+npm i -g dsh-r
 dsh-x
 ```
 
-首次运行会从 npm registry 下载跨平台的二开核心包（`dsh-x-remote-core`，约 12 MB；Windows / macOS / Linux 共用同一个包），缓存到：
+首次运行会从 npm registry 下载跨平台的 DSH-R 核心包（`dsh-r-core`，约 12 MB；Windows / macOS / Linux 共用同一个包），缓存到：
 
 - Windows：`%LOCALAPPDATA%\dsh-x`
 - macOS：`~/Library/Caches/dsh-x`
 - Linux：`~/.cache/dsh-x`（或 `$XDG_CACHE_HOME/dsh-x`）
 
-之后用 `dsh-x --update` 更新核心，或用 `npm update -g @yyh001/dsh-x` 更新 CLI（外壳）和 Electron 依赖。每次启动也会检查 npm 上的核心版本，有新版就自动下载。
+之后用 `dsh-r --update` 更新核心，或用 `npm update -g dsh-r` 更新 CLI（外壳）和 Electron 依赖。每次启动也会检查 npm 上的核心版本，有新版就自动下载。
 
 ## 命令
 
 ```sh
 dsh-x              # 启动管理器
-dsh-x --update     # 更新核心到 npm 最新版
-dsh-x --version    # CLI 和核心版本
-dsh-x --core       # 核心目录
-dsh-x --help
+dsh-r --update     # 更新核心到 npm 最新版
+dsh-r --version    # CLI 和核心版本
+dsh-r --core       # 核心目录
+dsh-r --help
 ```
 
 ## 和安装版的区别

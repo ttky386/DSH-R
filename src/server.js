@@ -213,7 +213,7 @@ const PKG = '@deepseek-ai/dsh'
 const APP_VERSION = CORE_VERSION
 /** 外壳版本：外壳加载核心前通过 DSH_SHELL_VERSION 传进来；拆包后和核心版本分开走。 */
 const SHELL_VERSION = String(process.env.DSH_SHELL_VERSION || APP_VERSION)
-const APP_REPO = 'yyh-001/DSH-X'
+const APP_REPO = 'ttky386/DSH-R'
 // 发布页上的安装包名：scripts/pack.mjs 按平台产出同名文件
 const APP_SETUP = IS_MAC ? `DSH-X-mac-${process.arch}.dmg` : 'DSH-Setup.exe'
 // 管理页端口：环境变量 PORT（开发和测试用）优先，其余看设置；启动时 startServer() 再定最终值
@@ -4103,7 +4103,7 @@ export async function refreshShortcuts({ installRoot, appDir = APP_DIR, version 
 }
 
 /**
- * 检查核心更新：核心是 npm 上的跨平台 dsh-x-remote-core，按核心版本所在通道查 dist-tags。
+ * 检查核心更新：核心是 npm 上的跨平台 dsh-r-core，按核心版本所在通道查 dist-tags。
  * 外壳/Electron 不在核心更新范围内（那是 electron-updater 的事）；Electron 版本不同时
  * 只提示更新外壳。核心目录在用户目录里，不在签名的 .app 内，mac 也不需要重签。
  */

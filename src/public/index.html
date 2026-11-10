@@ -384,7 +384,7 @@
                       <option value="127.0.0.1" data-i18n="回环（127.0.0.1）">回环（127.0.0.1）</option>
                       <option value="custom" data-i18n="指定远端 IP">指定远端 IP</option>
                     </select>
-                    <input id="remoteWebBindAddress" type="text" inputmode="ipv4" spellcheck="false" autocomplete="off" placeholder="100.90.243.53" hidden />
+                    <input id="remoteWebBindAddress" type="text" inputmode="ipv4" spellcheck="false" autocomplete="off" placeholder="198.51.100.53" hidden />
                   </div>
                 </div>
                 <div class="set-row">
@@ -688,7 +688,7 @@
                     <span class="set-desc" data-i18n="在 GitHub 上给 DSH-X 点个 Star">在 GitHub 上给 DSH-X 点个 Star</span>
                   </div>
                   <div class="set-control">
-                    <a class="star-link" href="https://github.com/yyh-001/DSH-X" target="_blank" rel="noreferrer"
+                    <a class="star-link" href="https://github.com/ttky386/DSH-R" target="_blank" rel="noreferrer"
                        title="在 GitHub 上给 DSH-X 点个 Star" data-i18n-title="在 GitHub 上给 DSH-X 点个 Star">
                       <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.7l1.93 3.91 4.32.63-3.12 3.04.73 4.3L8 11.55l-3.86 2.03.73-4.3L1.75 6.24l4.32-.63z"/></svg>
                       <span>Star</span>
@@ -2054,7 +2054,7 @@
   "正在检查…": "Checking…",
   "发现新版本 {latest}，正在打开更新窗口…": "Version {latest} is available. Opening the update dialog…",
   "检查更新失败：{message}": "Update check failed: {message}",
-  "npm 安装的版本请用 npm update -g @yyh001/dsh-x 更新。": "This npm-installed copy updates with npm update -g @yyh001/dsh-x.",
+  "npm 安装的版本请用 npm update -g dsh-r 更新。": "This npm-installed copy updates with npm update -g dsh-r.",
   "核心已是最新。这个安装形态（deb / macOS）不支持外壳自更新，换外壳请到发布页下载新的安装包。": "The core is up to date. This install (deb / macOS) cannot self-update the shell; download the new installer from the releases page.",
   "DSH-X 外壳": "DSH-X shell",
   "更新外壳到 {latest}": "Update the shell to {latest}",
@@ -8274,7 +8274,7 @@
     }
 
     /**
-     * 核心更新：从 npm 下载 dsh-x-remote-core-*，只换核心目录，外壳和 Electron 不动。
+     * 核心更新：从 npm 下载 dsh-r-core-*，只换核心目录，外壳和 Electron 不动。
      * 下载完成 → 复制到 core/current 或起替换助手 → 外壳退出重启。
      */
     async function startAppUpdate(btn) {
@@ -8341,7 +8341,7 @@
             aboutUpdateHintEl.textContent = t('发现外壳新版本 {latest}，正在打开更新窗口…', { latest: shellState.latest || '' })
             showAsk({ dsh: null, shell: shellState, self: coreReady ? { current: data.current, latest: data.app?.latest, url: data.url } : null })
           } else if (data.npm) {
-            aboutUpdateHintEl.textContent = t('npm 安装的版本请用 npm update -g @yyh001/dsh-x 更新。')
+            aboutUpdateHintEl.textContent = t('npm 安装的版本请用 npm update -g dsh-r 更新。')
           } else if (coreReady) {
             aboutUpdateHintEl.textContent = t('发现新版本 {latest}，正在打开更新窗口…', { latest: data.app?.latest || data.latest })
             showAsk({ dsh: null, self: { current: data.current, latest: data.app?.latest || data.latest, url: data.url } })
@@ -8543,7 +8543,7 @@
         // 自动更新不管用时的退路：直接给发布页，自己挑对应平台的安装包。
         const manual = document.createElement('a')
         manual.className = 'ghost'
-        manual.href = 'https://github.com/yyh-001/DSH-X/releases/latest'
+            manual.href = 'https://github.com/ttky386/DSH-R/releases/latest'
         manual.target = '_blank'
         manual.rel = 'noreferrer'
         manual.textContent = t('手动下载')

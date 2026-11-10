@@ -98,9 +98,9 @@ test('标签目标保留认证地址，拒收外部地址', () => {
 
 test('受管远程 DSH 标签能跨随机端口跟随，未标记的外部地址仍然拒收', () => {
   const target = (port) => ({
-    id: '["remote:100.90.243.53:kali","","auto","web"]',
-    title: '100.90.243.53',
-    url: `http://100.90.243.53:${port}/?token=secret-${port}`,
+    id: '["remote:198.51.100.53:remote-user","","auto","web"]',
+    title: '198.51.100.53',
+    url: `http://198.51.100.53:${port}/?token=secret-${port}`,
     status: 'running',
     managed: true,
     remote: true,
@@ -125,7 +125,7 @@ test('/api/tray 解析：实例与启动项各自校验，坏行不影响其余�
     'theme=dark',
     `instances=${JSON.stringify([
       { id: 'a', url: 'http://127.0.0.1:1/?token=t' },
-      { id: 'remote', url: 'http://100.90.243.53:36453/?token=t', managed: true, remote: true },
+      { id: 'remote', url: 'http://198.51.100.53:36453/?token=t', managed: true, remote: true },
       { id: 'b', url: 'https://example.com/' },
     ])}`,
     'launches=not json',

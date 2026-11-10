@@ -34,7 +34,7 @@ test('npm 元数据：按通道取 dist-tag，取不到退回 latest', () => {
 })
 
 test('npm 包名：核心包跨平台，scoped 包要编码斜杠', () => {
-  assert.equal(CORE_PACKAGE, 'dsh-x-remote-core', '二开核心与上游包名隔离')
+  assert.equal(CORE_PACKAGE, 'dsh-r-core', 'DSH-R 核心与上游包名隔离')
   assert.equal(coreMetadataUrl('https://registry.npmjs.org/', 'dsh-x-core'), 'https://registry.npmjs.org/dsh-x-core')
   assert.equal(coreMetadataUrl('https://registry.npmjs.org', '@scope/dsh-x-core'), 'https://registry.npmjs.org/@scope%2Fdsh-x-core')
 })

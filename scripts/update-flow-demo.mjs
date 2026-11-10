@@ -35,7 +35,7 @@ const USER_DATA = join(TEST_INSTALL, 'userdata')
 const TEST_APP = IS_MAC ? join(TEST_INSTALL, 'DSH-X.app') : join(TEST_INSTALL, 'DSH.exe')
 const LAUNCH = IS_MAC ? join(TEST_APP, 'Contents', 'MacOS', 'DSH') : TEST_APP
 const electronVersion = JSON.parse(await readFile(join(ROOT, 'node_modules', 'electron', 'package.json'), 'utf8')).version
-const PACKAGE = process.env.DSH_CORE_PACKAGE || 'dsh-x-remote-core'
+const PACKAGE = process.env.DSH_CORE_PACKAGE || 'dsh-r-core'
 
 let metadata = null
 let tarballName = ''

@@ -1,10 +1,10 @@
 {
   "name": "dsh-x",
   "productName": "DSH",
-  "version": "0.1.26-rc.4",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness 桌面启动器：启动项与多实例，版本、插件、整合包、MCP 和技能管理。",
+  "description": "DSH-X 启动器的二开项目 DSH-R：本机管理与远程 Linux DSH 控制台。",
   "main": "src/start.js",
   "engines": {
     "node": ">=22.18.0"
@@ -21,15 +21,15 @@
     "release:verify": "node scripts/release-manifest.mjs verify",
     "release:check": "node scripts/release-manifest.mjs check-tag"
   },
-  "author": "yyh",
+  "author": "ttky",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yyh-001/DSH-X.git"
+    "url": "git+https://github.com/ttky386/DSH-R.git"
   },
-  "homepage": "https://yyh-001.github.io/DSH-X/",
+  "homepage": "https://github.com/ttky386/DSH-R#readme",
   "bugs": {
-    "url": "https://github.com/yyh-001/DSH-X/issues"
+    "url": "https://github.com/ttky386/DSH-R/issues"
   },
   "keywords": [
     "dsh",

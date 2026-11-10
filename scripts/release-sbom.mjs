@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-export const REPO = 'yyh-001/DSH-X'
+export const REPO = 'ttky386/DSH-R'
 
 /** 随包发的第三方运行时：目录 → SPDX 条目信息。
  *  Electron 就是软件本体（内含 Node）；node.exe / corepack 只有 0.1.19 及以前的包才有。 */

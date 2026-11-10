@@ -252,7 +252,7 @@ export function safeRemoteDshHome(dir) {
   const trimmed = dir.trim().replace(/\/+$/, '') || ''
   if (!trimmed) return ''
   if (!/^(?:\/|[A-Za-z]:[\\/])/.test(trimmed) || trimmed.length > 4096 || /[\0\r\n]/.test(trimmed)) {
-    throw new Error('远程 dsh 目录请使用远端系统的绝对路径，例如 /home/kali/.dsh')
+    throw new Error('远程 dsh 目录请使用远端系统的绝对路径，例如 /home/remote-user/.dsh')
   }
   return trimmed
 }

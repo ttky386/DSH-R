@@ -1,10 +1,10 @@
-// 核心包（dsh-x-remote-core）的获取：查 npm 元数据 → 挑版本 → 下 tarball → 校验 sha512 → 解压。
+// 核心包（dsh-r-core）的获取：查 npm 元数据 → 挑版本 → 下 tarball → 校验 sha512 → 解压。
 //
 // 两处用它：
 // - 安装版外壳：安装包里不再带核心，第一次启动就靠它从 npm 取到 core/current（见 shell/main.mjs）
 // - npm CLI（npm-package/lib/core.mjs）：取到自己的缓存目录
 // 解压用系统自带的 tar（Windows 10+ 的 System32\tar.exe、其他平台的 /usr/bin/tar），不引依赖。
-// 核心包跨平台：Windows / mac / Linux 用二开专用的 dsh-x-remote-core。
+// 核心包跨平台：Windows / mac / Linux 用 DSH-R 专用的 dsh-r-core。
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -20,7 +20,7 @@ const IS_MAC = process.platform === 'darwin'
 export const CORE_MAX_BYTES = 128 * 1024 * 1024
 
 export function corePackageName() {
-  return process.env.DSH_CORE_PACKAGE || 'dsh-x-remote-core'
+  return process.env.DSH_CORE_PACKAGE || 'dsh-r-core'
 }
 
 /**

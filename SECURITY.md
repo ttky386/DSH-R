@@ -13,7 +13,7 @@ DSH-X 是第三方启动器，本身不处理账号凭据，但它会：
 
 **别开公开 issue。** 用 GitHub 的私密漏洞报告：
 
-https://github.com/yyh-001/DSH-X/security/advisories/new
+https://github.com/ttky386/DSH-R/security/advisories/new
 
 请在报告里写清：影响版本、复现步骤、是本地利用还是需要用户交互、你希望的披露时间。
 

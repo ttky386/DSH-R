@@ -12,14 +12,14 @@ test('Linux 外壳走 AppImage + deb，并内置二开离线核心', () => {
   assert.match(config, /target: 'AppImage', arch: \['x64'\]/)
   assert.match(config, /target: 'deb', arch: \['x64'\]/)
   assert.match(config, /from: 'release\/core-bootstrap', to: 'core-bootstrap'/)
-  assert.match(config, /dsh-x-remote-core/)
+  assert.match(config, /dsh-r-core/)
   assert.match(read('shell/main.mjs'), /core-fetch\.mjs/)
   assert.match(config, /StartupWMClass: 'DSH-X'/)
 
   const pack = read('scripts/pack.mjs')
   assert.match(pack, /--stage-only/)
   assert.match(pack, /buildCoreBootstrap\(\)/)
-  assert.match(pack, /name: 'dsh-x-remote-core'/)
+  assert.match(pack, /name: 'dsh-r-core'/)
   assert.match(pack, /args\.push\('--linux', process\.arch === 'arm64' \? '--arm64' : '--x64'\)/)
 })
 

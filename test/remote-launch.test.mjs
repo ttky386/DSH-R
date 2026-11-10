@@ -17,8 +17,8 @@ const remoteShell = readFileSync(fileURLToPath(new URL('../src/remote-shell.js',
 const packCommon = readFileSync(fileURLToPath(new URL('../scripts/pack-common.mjs', import.meta.url)), 'utf8')
 
 test('远程目标只保存 SSH 信息；旧 managerPort 可输入但不落盘', () => {
-  assert.deepEqual(safeRemoteTarget({ host: '100.90.243.53', user: 'kali', sshPort: 22, managerPort: 3780 }), {
-    host: '100.90.243.53', user: 'kali', sshPort: 22,
+  assert.deepEqual(safeRemoteTarget({ host: '198.51.100.53', user: 'remote-user', sshPort: 22, managerPort: 3780 }), {
+    host: '198.51.100.53', user: 'remote-user', sshPort: 22,
   })
   assert.equal(safeRemoteTarget({ host: 'DSH-Target', user: 'kali' }).host, 'dsh-target')
   assert.equal(safeRemoteTarget({ host: 'host', user: 'kali' }).identityFile, undefined)
@@ -35,14 +35,14 @@ test('远程目标只保存 SSH 信息；旧 managerPort 可输入但不落盘',
 test('远程启动项保留远端路径，坏目标整项丢弃而不是落到本机执行', () => {
   const good = { id: 'a'.repeat(16), name: 'Remote', version: 'auto', profile: 'web', port: 0, remote: { host: 'dsh-target', user: 'kali', sshPort: 22 } }
   assert.equal(safeLaunchPresets([good]).find((item) => item.id === good.id).remote.host, 'dsh-target')
-  assert.equal(safeLaunchPresets([{ ...good, dshHome: '/home/kali/.dsh' }]).find((item) => item.id === good.id).dshHome, '/home/kali/.dsh')
+  assert.equal(safeLaunchPresets([{ ...good, dshHome: '/home/remote-user/.dsh' }]).find((item) => item.id === good.id).dshHome, '/home/remote-user/.dsh')
   assert.equal(safeLaunchPresets([{ ...good, remote: { host: 'bad host', user: 'kali' } }]).some((item) => item.id === good.id), false)
 })
 
 test('SSH 参数走密钥/agent，远端代理输入按 base64 JSON stdin 传输', () => {
-  assert.deepEqual(sshArgs({ host: 'dsh-target', user: 'kali', sshPort: 10022 }), [
+  assert.deepEqual(sshArgs({ host: 'dsh-target', user: 'remote-user', sshPort: 10022 }), [
     '-p', '10022', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'BatchMode=yes', 'kali@dsh-target',
+    '-o', 'BatchMode=yes', 'remote-user@dsh-target',
   ])
   assert.equal(shellQuote("it's"), `'it'\\''s'`)
   assert.match(remoteLaunch, /Buffer\.from\(JSON\.stringify\(payload\), 'utf8'\)\.toString\('base64'\)/)
@@ -136,7 +136,7 @@ test('远端绑定地址与本地 Web 绑定分离，默认 0.0.0.0', () => {
   assert.equal(DEFAULT_REMOTE_WEB_BIND, '0.0.0.0')
   assert.equal(safeRemoteWebBind(undefined), '0.0.0.0')
   assert.equal(safeRemoteWebBind('127.0.0.1'), '127.0.0.1')
-  assert.equal(safeRemoteWebBind('100.90.243.53'), '100.90.243.53')
+  assert.equal(safeRemoteWebBind('198.51.100.53'), '198.51.100.53')
   assert.throws(() => safeRemoteWebBind('example.com'))
   assert.match(html, /id="remoteWebBindMode"/)
   assert.match(html, /id="remoteWebBindAddress"/)

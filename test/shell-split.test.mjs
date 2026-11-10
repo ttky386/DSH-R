@@ -30,7 +30,7 @@ test('构建把外壳和二开离线核心分成两个 stage', () => {
   const pack = read('scripts/pack.mjs')
   assert.match(pack, /shell-stage/)
   assert.match(pack, /core-stage/)
-  assert.match(pack, /name: 'dsh-x-remote-core'/, '二开核心使用独立包名，不混用上游核心')
+  assert.match(pack, /name: 'dsh-r-core'/, 'DSH-R 核心使用独立包名，不混用上游核心')
   assert.match(pack, /main: 'server\.js'/, '核心 package.json 指向 server.js')
   assert.match(pack, /main: 'shell\/main\.mjs'/, '外壳 package.json 指向 shell/main.mjs')
   assert.match(pack, /buildCoreBootstrap\(\)/, '安装包内置离线核心引导包')
@@ -42,7 +42,7 @@ test('构建把外壳和二开离线核心分成两个 stage', () => {
   const core = read('scripts/pack-core.mjs')
   assert.match(core, /release', 'core-stage'/)
   assert.match(core, /main: 'server\.js'/)
-  assert.match(core, /'dsh-x-remote-core'/, 'pack-core 默认包名跨平台且与上游隔离')
+  assert.match(core, /'dsh-r-core'/, 'pack-core 默认包名跨平台且与上游隔离')
   const common = read('scripts/pack-common.mjs')
   assert.match(common, /filemanager-windows\.js/)
   assert.match(common, /filemanager-mac\.js/)
@@ -76,7 +76,7 @@ test('外壳版本和核心版本分开：shell/package.json + 关于页显示�
 })
 
 test('npm CLI 带着外壳启动，核心目录通过 DSH_CORE_DIR 传入', () => {
-  const bin = read('npm-package/bin/dsh-x.mjs')
+  const bin = read('npm-package/bin/dsh-r.mjs')
   assert.match(bin, /DSH_CORE_DIR: core\.dir/)
   assert.match(bin, /spawn\(electron, \[appRoot\]/)
   const pack = read('scripts/pack-npm.mjs')
@@ -84,7 +84,7 @@ test('npm CLI 带着外壳启动，核心目录通过 DSH_CORE_DIR 传入', () =
   assert.match(pack, /shell\/main\.mjs/)
   assert.match(pack, /shellPkg\.version/, 'CLI 版本跟外壳走')
   assert.match(read('npm-package/lib/core.mjs'), /shell\/core-fetch\.mjs/, 'CLI 复用外壳那套核心获取逻辑')
-  assert.match(read('shell/core-fetch.mjs'), /'dsh-x-remote-core'/, '二开核心包名跨平台且与上游隔离')
+  assert.match(read('shell/core-fetch.mjs'), /'dsh-r-core'/, 'DSH-R 核心包名跨平台且与上游隔离')
 })
 
 test('首启下载页：实时进度与下载源，总大小未知时走不确定态', () => {

@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build installer
+        env:
+          DSH_TARGET_PLATFORM: win
+        run: npm run dist
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installers = Get-ChildItem release/eb -Filter 'DSH-Setup-*.exe' -File
+          if ($installers.Count -ne 1) { throw "Expected one DSH installer, found $($installers.Count)" }
+          $installer = $installers[0]
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content (Join-Path $installer.DirectoryName "$($installer.Name).sha256") -NoNewline
+          $assets = @(
+            $installer.FullName,
+            "$($installer.FullName).sha256"
+          )
+          foreach ($name in @('latest.yml', "$($installer.Name).blockmap")) {
+            $file = Join-Path 'release/eb' $name
+            if (Test-Path $file) { $assets += $file }
+          }
+          $assets | Set-Content release-assets.txt
+          Get-ChildItem release/eb -File | Select-Object Name,Length
+
+      - name: Upload GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ([string]::IsNullOrWhiteSpace($tag) -or $tag -eq 'main') { $tag = "v$((Get-Content package.json -Raw | ConvertFrom-Json).version)" }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $notes = "docs/releases/v$version.md"
+          if (-not (Test-Path $notes)) { throw "Release notes not found: $notes" }
+          $assets = Get-Content release-assets.txt | Where-Object { $_ }
+          gh release create $tag --title "DSH-R $tag" --notes-file $notes --latest @assets
